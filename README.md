@@ -110,6 +110,16 @@ cargo test --test e2e_rocksdb --features rocksdb -- --test-threads=1
 
 The RocksDB e2e tests write to `.e2e-data/` (git-ignored).
 
+## Examples
+
+Runnable examples live in `examples/` and use the in-memory engine:
+
+```sh
+cargo run --example quickstart          # define -> create -> read -> update -> delete
+cargo run --example relationships       # has_many / belongs_to, filter, order, paginate
+cargo run --example documents_upsert    # #[document] embeds + native UPSERT
+```
+
 ## Design docs
 
 Engineering design lives under `.agents/`: the accepted
