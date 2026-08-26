@@ -93,7 +93,9 @@ fn capability(&self) -> &'static Capability {
         sql_placeholder: None,
         // SurrealQL 原生能力，优于 DynamoDB 保守取值
         scan: true,
-        scan_supports_sort: true,
+        // 扫描不排序：unindexed 读走 scan 路径，排序读走 QueryPk 索引路径；
+        // 与共享合约「非 SQL scan 无序」一致。
+        scan_supports_sort: false,
         index_or_predicate: true,
         upsert_primary_key: true,
         primary_key_ne_predicate: true,
@@ -104,10 +106,10 @@ fn capability(&self) -> &'static Capability {
 ```
 
 - **必须**用 FRU；新增字段自动继承 DYNAMODB。
-- 其余位（`native_json`、`vec_*`、`document_collections`、日期/decimal 等）首阶段随 DYNAMODB
-  基线；由集成测试逐位收敛，调整时同步本节。
-- `validate()` 必须通过（`sql`/`sql_placeholder` 同为 None；`native_varchar=false` 且
-  `varchar=None`，DYNAMODB 基线已满足）。
+- `native_starts_with` 继承 DYNAMODB 的 `true`（SurrealDB 有 `string::starts_with`），driver
+  在 `expr::render` 里以带 NULL 守卫的形式渲染。
+- 其余位（`native_json`、`vec_*`、`document_collections`、日期/decimal 等）随 DYNAMODB 基线。
+- `validate()` 必须通过（单元测试覆盖），运行时 `generate_driver_tests!` 的能力校验也通过。
 
 ## 5. 记录 ID 与主键映射
 
@@ -121,13 +123,15 @@ fn capability(&self) -> &'static Capability {
 | 单列 UUID | `Uuid` | `RecordIdKey::Uuid` |
 | 复合（≥2 列） | `Record([..])` | `RecordIdKey::Array`（元素按列序编码为 surreal `Value`） |
 
-- 引擎按键操作传入的 `keys: Vec<stmt::Value>`：单列时元素即标量；复合时元素为
-  `Value::Record`。driver 用上表构造 record id。
-- 读取行时，SurrealDB 返回的行含 `id` 字段（native `RecordId`）。driver 按 `op.select` 的列
-  顺序取值：主键列从 `RecordId` 反解，其余列从 object 字段取；缺失字段填 `Value::Null`。
-- 无符号整数超过 `i64::MAX` 的映射遵循 DYNAMODB 基线（`max_unsigned_integer` 未限制，但
-  SurrealDB `Number::Int` 是 i64；`U64` 溢出应返回 `unsupported_feature` 或按字符串编码，
-  首阶段以整数为主，溢出留待测试暴露后处理）。
+- 引擎按键操作传入的 `keys: Vec<stmt::Value>`：**实测中即便单列主键，引擎也可能把键包成
+  单元素 `Value::Record`**（如 `GetByKey`），而 insert 行里单列键是裸标量。因此 record id 的
+  形态由**主键列数（arity）**决定，而非值是否为 record：单列 → 标量 key（必要时解包单元素
+  record），复合 → `Array` key。
+- 读取行时，SurrealDB 返回的行含 `id` 字段（native `RecordId`）。driver 在投影里用
+  `record::id(id) AS <col>`（复合键用 `record::id(id)[k] AS <col>`）把主键列别名回列名，其余
+  列直接取；缺失字段填 `Value::Null`。
+- 无符号整数超过 `i64::MAX`：**以 `Number::Decimal` 编码**（不丢失量级），`U64` 解码路径从
+  Decimal 还原；不再返回 `unsupported_feature`。
 
 ## 6. 值编解码
 
@@ -140,106 +144,113 @@ fn capability(&self) -> &'static Capability {
 | `Bool` | `Bool` |
 | `I8/I16/I32/I64` | `Number(Number::Int(i64))` |
 | `U8/U16/U32` | `Number(Number::Int(i64))` |
-| `U64` | `Number(Number::Int(i64))`（溢出 → `unsupported_feature`） |
+| `U64` | `Int` 若 ≤ i64::MAX，否则 `Number::Decimal`（不丢失量级） |
 | `F32/F64` | `Number(Number::Float(f64))` |
 | `String` | `String` |
 | `Bytes` | `Bytes` |
 | `Uuid` | `Uuid` |
 | `List(items)` | `Array` |
 | `Record(items)` | `Array`（用于复合键；行记录用 object） |
-| `Object(fields)` | `Object`（`#[document]` 列） |
+| `Object(fields)` | `Object`（`#[document]` 列，**跳过 null 字段**以支持 `IS NONE`） |
+| `Timestamp/Date/Time/DateTime/Decimal/Cidr/...` | `String`（canonical text，读取时 `Type::cast` 还原） |
 
-读取解码按目标 `stmt::Type` 定向（对标 SQLite `from_sql`）：`Number::Int` 依 `Type::{I8..U64,
-Bool}` 收窄；`Number::Float` 依 `Type::{F32,F64}`；`String` 依 `Type::{Uuid, String, ...}`；
-`RecordId` → 依主键列类型反解为标量或 `Record`。未覆盖的 `Value`/`Type` 组合返回
-`Error::driver_operation_failed`（或 `unsupported_feature`），不 panic。
+读取解码按目标 `stmt::Type` 定向（对标 SQLite `from_sql`）：`Number::Int/Decimal` 依
+`Type::{I8..U64, Bool}` 收窄（`U64` 从 Decimal 还原）；`Number::Float` 依 `Type::{F32,F64}`；
+`String` 依目标类型（`Uuid` 解析；temporal/decimal/net 走 `Type::cast`；`String`/`Unknown`
+保持字符串——`Unknown` 用于 `#[document]` 叶子，由引擎在 raise embed 时再 cast）；`RecordId`
+→ 依主键列类型反解为标量或 `Record`。未覆盖的组合返回结构化错误，不 panic。
 
-可选 crate 特性 `jiff`/`rust_decimal`/`net` 首阶段不启用；若启用则 `Datetime`↔`jiff`、
-`Number::Decimal`↔`rust_decimal`、网络类型走字符串，需另加测试。
+crate 特性：本 crate 生产依赖启用 `toasty-core` 的 `jiff` + `rust_decimal`，使 temporal 与
+decimal 值可编解码。`net` 未启用。RocksDB 引擎由本 crate 的 `rocksdb` feature 开启
+（默认关闭，编译 `librocksdb` 较慢）。
 
 ## 7. Operation → SurrealQL 翻译
 
-所有标量值以绑定参数（`.bind((name, value))`）下发，name 用稳定生成规则（如 `$p0,$p1,…`）；
-记录 ID 用 `type::record($tb,$id)`。列投影用列名列表；`SELECT *` 仅在需要全列时使用。
+所有标量值以绑定参数（`.bind((name, value))`）下发，name 用稳定生成规则（`p0,p1,…`）；记录 ID
+以 native `RecordId` 绑定为 `$rid`/`$kN`（不做字符串拼接）。列投影用列名列表。
+
+> **重要（Insert 路由）**：实测 toasty 0.10 引擎对 KV driver 的插入不走
+> `Operation::Insert`，而是把 `Statement::Insert` 包在 `Operation::QuerySql` 里下发。driver 的
+> `exec` 因此在 `QuerySql` 分支里判定内层是否 `Statement::Insert` 并转到插入处理；`Insert`
+> 变体也保留处理以防其它引擎版本使用它。
 
 ### 7.1 Insert
 
-- 语句：`CREATE type::record($tb,$id) CONTENT $data`。
-- `$data` 为 object，键为列名，值为编码后 surreal `Value`；主键列不放入 CONTENT（由 record id
-  承担），其余非空列放入。多行 insert 循环执行（或多语句），逐行构造。
-- 返回：`op.ret` 为 `None` 时返回 `ExecResponse::count(n)`；`Some(types)` 时 `RETURN AFTER` 并
-  解码投影行。
-- 冲突：SurrealDB 报 `already exists` → 映射为唯一冲突错误（见 §9）。
+- 语句：`CREATE $rid CONTENT $data`（有 RETURNING 时加 `RETURN AFTER`）。
+- `$data` 为 object，键为列名；主键列不放入 CONTENT（由 record id 承担），其余非空列放入。
+  多行 insert 循环执行。
+- 返回：有 RETURNING 投影时解码为行；否则返回受影响计数。冲突（`already exists`）见 §9。
 
 ### 7.2 GetByKey
 
-- 语句：`SELECT <cols> FROM type::record($tb,$id0), type::record($tb,$id1), …`（多键一条查询）
-  或逐键查询。
-- 未命中键不产生行（不报错）。返回 `ValueStream`，每行按 `op.select` 解码。
+- 语句：`SELECT <cols> FROM $k0, $k1, …`。主键列在投影里用 `record::id(id) AS <col>` 别名。
+- 未命中键不产生行（不报错）。
 
 ### 7.3 QueryPk
 
-- 语句：`SELECT <cols> FROM <tb> WHERE <pk_filter> [AND <filter>] [ORDER BY <sort>] [LIMIT n]
-  [START m]`。
-- `op.index` 为 `Some` 时改为按索引字段过滤（SurrealDB 索引对查询透明，`WHERE` 引用索引列
-  即可，`FindPkByIndex` 亦然）。
-- `op.pk_filter` 与 `op.filter` 经 `surreal_expression()` 翻译（§8）。
-- `op.order`：单向 `ORDER BY <col> ASC|DESC`。
-- 分页 `Pagination`：`Offset{limit,offset}` → `LIMIT limit START offset`；`Cursor{page_size,
-  after}` → 首阶段用 keyset 谓词或 `LIMIT/START` 近似，游标以最后一行主键编码；
-  `backward_pagination` 依 DYNAMODB 基线为 `false`。
+- 语句：`SELECT <cols>[, <sort_ref> AS __toasty_sort_key] FROM <tb> WHERE <pred>
+  [ORDER BY __toasty_sort_key ASC|DESC] [LIMIT n] [START m]`。
+- `op.index` 为 `Some` 时按索引字段过滤（SurrealDB 索引对查询透明）。
+- `op.pk_filter` 与 `op.filter` 经 `expr::render()` 翻译（§8）AND 合并。
+- **排序**：SurrealQL 拒绝把 `record::id(id)[k]` 直接作为 ORDER BY idiom，故排序键投影为隐藏
+  别名 `__toasty_sort_key` 再 `ORDER BY` 该别名。
+- **分页**：`Offset` → `LIMIT/START`；`Cursor` → keyset（默认排序键升序，`after` 加
+  `sort_ref > $cursor`，降序用 `<`；页满时从末行排序键别名取 `next_cursor`）。
+  `backward_pagination=false`，不产 prev。
 
 ### 7.4 FindPkByIndex
 
-- 语句：`SELECT <pk cols> FROM <tb> WHERE <index filter>`。
-- 返回主键值行，供引擎后续 `GetByKey` 使用。
+- 语句：`SELECT <pk cols> FROM <tb> WHERE <index filter>`，返回主键行供后续 `GetByKey`。
 
 ### 7.5 Scan
 
-- 语句：`SELECT <cols> FROM <tb> [WHERE <filter>] [LIMIT/START]`。
-- `op.columns` 为列下标（相对表列表），映射为列名投影。
+- 语句：`SELECT <cols> FROM <tb> [WHERE <filter>] [LIMIT/START]`。无 ORDER BY
+  （`scan_supports_sort=false`），cursor 分页用 record id 排序键做 keyset 续页。
 
 ### 7.6 UpdateByKey
 
-- 引擎已把多键更新拆成每键一次，故 `op.keys` 恒为单键。
-- 语句：`UPDATE type::record($tb,$id) SET <assignments> [WHERE <filter>] [RETURN AFTER]`。
-- `op.assignments`：`Set(expr)` → `col = $v`（`Null` → `col = NONE` 或 `UNSET col`）；
-  `Add/Subtract` → `col = col + $v` / `col = col - $v`。`Append/Remove/Pop/RemoveAt` 由
-  `vec_*` 能力位（DYNAMODB 基线为 false）在引擎侧拦截，未拦截到则返回 `unsupported_feature`。
-- `op.filter`：附加 `WHERE`。`op.condition`：前置条件失败应报错而非静默跳过（首阶段可用
-  `WHERE` 近似 + 返回行数判定；条件失败映射为 `Error::condition_failed`）。
-- `op.returning`：`Some(cols)` → `RETURN AFTER` 并解码这些列；`None` → 返回受影响计数。
+- `op.keys` 恒为单键。语句：`UPDATE $rid SET <assignments> [WHERE <filter/condition>]
+  [RETURN AFTER]`。
+- `op.assignments`：`Set` → `col = $v`（`Null` → `col = NONE`）；`Add/Subtract` →
+  `col = col ± $v`；`Append`（push/extend）→ `col += $list`（单元素自动包成 list）。其它变体
+  返回 `unsupported_feature`（带 `_` 通配臂）。
+- `op.condition` 失败（更新 0 行）→ `Error::condition_failed`。
+- `op.returning`：`Some` → `RETURN AFTER` 解码；`None` → 返回计数。
 
 ### 7.7 DeleteByKey
 
-- 单键。语句：`DELETE type::record($tb,$id) [WHERE <filter>] [RETURN BEFORE]`。
+- 单键。语句：`DELETE $rid [WHERE <filter/condition>] RETURN BEFORE`（用返回行数计数）。
 - 纯 `filter` 未命中 → count 0；`condition` 失败 → `condition_failed`。
 
 ### 7.8 Upsert
 
-- 语句：`UPSERT type::record($tb,$id) CONTENT $data RETURN AFTER`（或按 `on_conflict` 用
-  `MERGE`）。`op.stmt` 携带已降级的 insert + upsert 目标；`upsert_primary_key=true` 允许主键
-  目标。`upsert_unique`/`upsert_branch_assignments` 依 DYNAMODB 基线（false）。
-- 返回：按 `op.ret` 解码 `AFTER` 行或不返回。
+- `Update` action：`UPSERT $rid SET …`。SurrealDB UPSERT 在 create 与 update 都执行 SET：
+  - create-only 列用 `col = col ?? $v`（等价 `if_not_exists`）；
+  - shared 操作用 `col = (col ?? default) ± $v` / `array::concat(col ?? default, $list)`，
+    把声明的 `#[default]` 折叠进去；
+  - 无可写项时退化为 `MERGE $content`。
+- `Ignore` action：`CREATE $rid CONTENT $data`，`already exists` 冲突被吞（空/0）。
+- 仅支持主键目标（非主键目标 → `unsupported_feature`）。
 
-## 8. 过滤表达式翻译（`surreal_expression`）
+## 8. 过滤表达式翻译（`expr::render`）
 
-对标 DynamoDB 的 `ddb_expression()`：递归把 `stmt::Expr` 翻译为 SurrealQL 布尔表达式，标量
-以绑定参数下发。至少支持：
+对标 DynamoDB 的 `ddb_expression()`：递归把 `stmt::Expr` 翻译为 SurrealQL 布尔表达式，标量以
+绑定参数下发。已支持：
 
-- `BinaryOp`：`Eq/Ne/Gt/Ge/Lt/Le` → `=/!=/>/>=/</<=`；`Add/Sub` 仅在赋值上下文。
-- `And`/`Or`（`Or` 用括号包裹）/`Not`。
-- `Reference`（列引用 → 列名；bool 裸列 → `col = true`）。
-- `Value` → 绑定参数。
-- `IsNull` → `col IS NONE`（SurrealDB 用 `NONE`/`NULL`；以 `IS NONE` 为主，读取时 `Null`
-  归一）。
-- `InList` → `col IN [$v0,$v1,…]`。
-- `StartsWith` → 首阶段可用 `string::starts_with(col, $p)`（需测试验证）；未验证前
-  `native_starts_with=false`，由引擎降级路径处理。
-- 未覆盖的 `Expr` 变体返回 `Error::unsupported_feature`（**带 `_` 通配臂**，不 panic）。
+- `BinaryOp`：`Eq/Ne/Gt/Ge/Lt/Le` → `=/!=/>/>=/</<=`；`Add/Sub` 用于赋值上下文。
+- `And`/`Or`（括号包裹）/`Not`（用 `!( … )` 前缀，SurrealQL 拒绝 `NOT x IS NONE`）。
+- `IsNull` → `<field> IS NONE`（操作数按字段引用渲染，避免 bool 列 `= true` 干扰）。
+- `Between` → `(x >= lo AND x <= hi)`（无链式关系运算符）。
+- `InList` → `x IN [ … ]`；`List` → 数组字面量。
+- `AnyOp`（`= ANY`）→ `list CONTAINS value`（其它运算符 unsupported）。
+- `IsSuperset` → `CONTAINSALL`；`Intersects` → `CONTAINSANY`；`Length` → `array::len(x)`。
+- `StartsWith` → `(x IS NOT NONE AND string::starts_with(x, $p))`（守卫 NULL/非串）。
+- `Func(JsonExtract)`（`#[document]` 路径）→ 点号字段引用 `col.a.b`（各段转义）。
+- `Reference`（主键列 → `record::id(id)[/k]`；bool 裸列 → `col = true`；其余 → 反引号列名）。
+- 未覆盖变体返回 `Error::unsupported_feature`（**带 `_` 通配臂**，不 panic）。
 
-列引用通过 `ExprContext`（`toasty_core::stmt::ExprContext::new_with_target`）解析为列，取
-`column.name`。
+主键列不是普通字段，必须经 `record::id(id)` 引用。`column_ref` 依 `Table::primary_key.columns`
+判定主键成员，**而非** `Column::primary_key`——schema builder 不设置后者。
 
 ## 9. 错误分类
 

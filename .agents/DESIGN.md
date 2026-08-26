@@ -36,7 +36,7 @@ surrealdb 嵌入式 SDK (kv-mem / kv-rocksdb)
 
 | 文档 | 类型与状态 | 权威范围 |
 |---|---|---|
-| [Driver Spec](specs/driver.md) | Active Spec | 公共接口、能力画像、值编解码、记录 ID 映射、Operation→SurrealQL、schema、错误、测试门禁 |
+| [Driver Spec](specs/driver.md) | Active Spec（首阶段已实现）| 公共接口、能力画像、值编解码、记录 ID 映射、Operation→SurrealQL、schema、错误、测试门禁 |
 | [RFC 0001：SurrealDB Driver](rfcs/0001-surrealdb-driver.md) | Accepted RFC | KV/文档归类、SDK 选择、PK 映射、依赖方向、被拒方案 |
 | [SurrealDB SDK Spike](spikes/surrealdb-sdk-3.2.4.md) | Completed Spike | SDK 行为证据、`type::record` 坑、值往返、版本锁定依据 |
 

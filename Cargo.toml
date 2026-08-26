@@ -1,0 +1,25 @@
+[package]
+name = "toasty-driver-surreal"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1.92"
+rust_decimal = "1.42.1"
+surrealdb = { version = "3.2.4", default-features = false, features = ["kv-mem"] }
+toasty-core = { version = "0.10", features = ["jiff", "rust_decimal"] }
+tokio = { version = "1", features = ["sync"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+hashbrown = "0.17.1"
+toasty = "0.10"
+toasty-driver-integration-suite = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid = { version = "1", features = ["v4"] }
+
+[features]
+# Embedded file-backed RocksDB engine. Off by default because it compiles
+# `librocksdb` from source (a large, slow C++ build). Enable it to use the
+# file-backed engine and to run the RocksDB end-to-end tests.
+rocksdb = ["surrealdb/kv-rocksdb"]
