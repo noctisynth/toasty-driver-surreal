@@ -31,6 +31,8 @@ changeset-template = """
 [packages.toasty-driver-surreal]
 path = "."
 resolver = "rust"
+channel = "alpha"
+channel-bump = "preserve"
 
 [resolver.rust.pre-check]
 type = "http"

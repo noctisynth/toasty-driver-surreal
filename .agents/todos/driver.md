@@ -80,9 +80,11 @@
 
 - [x] Cargo.toml 发布元数据（license `AGPL-3.0-only`、repository、description、keywords、
   categories、readme）+ AGPL-3.0 `LICENSE` 文件；`version` 不手改（由 Semifold CI 管理）。
-- [x] `semifold init`（rust resolver，base=main、release=release，stable 通道），
+- [x] `semifold init`（rust resolver，base=main、release=release）+
+  `semifold config channel set alpha --bump preserve`（alpha 预发布通道），
   `semifold config sync --check` + `semifold status` 通过。
-- [x] 生成 changeset `initial-surrealdb-driver`（minor/feat）；`semifold status` 规划 0.1.0→0.2.0。
+- [x] 生成 changeset `initial-surrealdb-driver`（minor/feat）；`semifold status` 规划
+  0.1.0→0.1.0-alpha.0（alpha 通道，preserve 基准）。
 - [x] GitHub Actions：`quality.yaml`（fmt/check/clippy/test/doc + 独立 rocksdb e2e job，
   stable toolchain）、`security.yaml`（cargo-deny + gitleaks）、`semifold-ci.yaml`、
   `semifold-status.yaml`。
