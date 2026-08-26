@@ -23,7 +23,7 @@ SurrealDB does not share (see [Known divergences](#known-divergences)).
 Attach the driver with `Db::builder().build(driver)` — the driver does not
 register a URL scheme, so `.connect(url)` is not used.
 
-```rust,no_run
+```rust
 use toasty::Db;
 use toasty_driver_surreal::SurrealDb;
 
@@ -34,19 +34,20 @@ struct User {
     name: String,
 }
 
-# async fn run() -> toasty::Result<()> {
-// In-memory engine (kv-mem, always available).
-let mut db = Db::builder()
-    .models(toasty::models!(User))
-    .build(SurrealDb::mem())
-    .await?;
-db.push_schema().await?;
+#[tokio::main]
+async fn main() -> toasty::Result<()> {
+    // In-memory engine (kv-mem, always available).
+    let mut db = Db::builder()
+        .models(toasty::models!(User))
+        .build(SurrealDb::mem())
+        .await?;
+    db.push_schema().await?;
 
-toasty::create!(User { id: 1, name: "Alice" }).exec(&mut db).await?;
-let user = User::get_by_id(&mut db, 1).await?;
-assert_eq!(user.name, "Alice");
-# Ok(())
-# }
+    toasty::create!(User { id: 1, name: "Alice" }).exec(&mut db).await?;
+    let user = User::get_by_id(&mut db, 1).await?;
+    assert_eq!(user.name, "Alice");
+    Ok(())
+}
 ```
 
 ### Engines
