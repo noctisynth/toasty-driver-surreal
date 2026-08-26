@@ -1,0 +1,7 @@
+/target/
+
+# Local e2e SurrealDB RocksDB datastore (created by tests, never committed)
+/.e2e-data/
+
+# Throwaway spike scratch crate (evidence is recorded under .agents/spikes/)
+/spike-tmp/
