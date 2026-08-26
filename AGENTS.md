@@ -4,9 +4,7 @@
 必须遵守以下约定。本仓库为 [Toasty ORM](https://github.com/tokio-rs/toasty) 实现一个 out-of-tree
 的 SurrealDB driver。
 
-## 0. 本仓库与 Armillae 的差异
-
-本仓库的 Rust 开发规范与 Armillae 保持一致，但有以下明确差异：
+## 0. 工作方式
 
 - **不锁定 MSRV**：不声明也不校验最低 Rust 版本。
 - **无人工审阅门禁**：开发过程中不需要人工确认，Agent 自行推进 RFC → Spec → 实现 → 测试。
