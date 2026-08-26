@@ -76,6 +76,19 @@
 - [x] README（使用方式、支持范围、未支持项、已知分歧）。
 - [x] 交付报告：产出、问题、技术方案变更（见最终回复）。
 
+## P7：发布与 CI/CD
+
+- [x] Cargo.toml 发布元数据（license `AGPL-3.0-only`、repository、description、keywords、
+  categories、readme）+ AGPL-3.0 `LICENSE` 文件；`version` 不手改（由 Semifold CI 管理）。
+- [x] `semifold init`（rust resolver，base=main、release=release，stable 通道），
+  `semifold config sync --check` + `semifold status` 通过。
+- [x] 生成 changeset `initial-surrealdb-driver`（minor/feat）；`semifold status` 规划 0.1.0→0.2.0。
+- [x] GitHub Actions：`quality.yaml`（fmt/check/clippy/test/doc + 独立 rocksdb e2e job，
+  stable toolchain）、`security.yaml`（cargo-deny + gitleaks）、`semifold-ci.yaml`、
+  `semifold-status.yaml`。
+- [x] `deny.toml`：AGPL 自例外 + SurrealDB BUSL-1.1 / ext-sort Unlicense 例外（逐条注明）、
+  bincode 未维护 advisory ignore；`cargo deny check advisories licenses bans sources` 通过。
+
 ## 后续范围（不在首阶段）
 
 远程引擎、事务、图边、live query、迁移生成、URL scheme 注册、裸 SurrealQL。需各自更新 Spec

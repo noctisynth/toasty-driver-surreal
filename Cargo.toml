@@ -2,6 +2,12 @@
 name = "toasty-driver-surreal"
 version = "0.1.0"
 edition = "2024"
+description = "SurrealDB driver for the Toasty ORM (key-value / document backend)"
+license = "AGPL-3.0-only"
+repository = "https://github.com/noctisynth/toasty-driver-surreal"
+readme = "README.md"
+keywords = ["surrealdb", "toasty", "orm", "driver", "database"]
+categories = ["database"]
 
 [dependencies]
 async-trait = "0.1.92"

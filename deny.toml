@@ -1,0 +1,57 @@
+[graph]
+all-features = true
+targets = [
+  "aarch64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+]
+
+[advisories]
+yanked = "warn"
+ignore = [
+  # bincode is flagged "unmaintained" (not a vulnerability) after the team
+  # ceased development; it reaches us only transitively via surrealdb, and no
+  # safe upgrade exists. Security vulnerabilities remain denied.
+  "RUSTSEC-2025-0141",
+]
+
+[licenses]
+confidence-threshold = 0.8
+private = { ignore = true }
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Zlib",
+]
+exceptions = [
+  # This crate is AGPL-3.0-only; its dependencies are not.
+  { allow = ["AGPL-3.0-only"], crate = "toasty-driver-surreal" },
+  # SurrealDB ships under the Business Source License 1.1 (source-available,
+  # not OSI-approved). The embedded engine and its support crates carry it.
+  # Downstream users must comply with BUSL-1.1's usage terms.
+  { allow = ["BUSL-1.1"], crate = "surrealdb" },
+  { allow = ["BUSL-1.1"], crate = "surrealdb-core" },
+  { allow = ["BUSL-1.1"], crate = "surrealdb-types" },
+  { allow = ["BUSL-1.1"], crate = "surrealdb-types-derive" },
+  { allow = ["BUSL-1.1"], crate = "surrealdb-strand" },
+  { allow = ["BUSL-1.1"], crate = "surrealdb-collections" },
+  { allow = ["BUSL-1.1"], crate = "surrealdb-protocol" },
+  # ext-sort (a transitive surrealdb-core dependency) is public-domain
+  # (Unlicense); allow it explicitly rather than widening the global list.
+  { allow = ["Unlicense"], crate = "ext-sort" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

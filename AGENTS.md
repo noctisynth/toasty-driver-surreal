@@ -69,32 +69,55 @@
 - 新增/移除依赖、crate、feature 时使用 Cargo CLI（`cargo add`、`cargo remove`、`cargo new`）。
 - 执行 Cargo CLI 后检查 manifest 与 lockfile 的实际变化。
 - `surrealdb` 使用经 Spike 验证的稳定版本（当前 `3.2.4`，非预发布）；升级前先复跑 SDK Spike。
+- package `version` 由 GitHub Actions 的 Semifold CI 依据 changeset 修改；不得由 Agent 手工
+  编辑或用 Cargo CLI 本地调整。
 
-## 6. 安全与日志
+## 6. Semifold changeset 与发布
+
+- 仓库使用 Semifold（命令 `smif`/`semifold`），配置位于 `.changes/config.toml`。
+- `main` 是 base branch，Semifold 管理独立的 `release` branch；stable 发布通道。
+- 配置与 package 列表通过 `semifold init` / `semifold config sync` 维护；执行后审查生成内容。
+- 影响 crate 行为（功能、修复、重构、依赖、测试能力）的任务用 `semifold commit` 创建 changeset；
+  纯文档、CI、仓库管理可不创建。不得手工编写 changeset 绕过 CLI。
+- 创建 changeset 后运行 `semifold status` 确认解析成功、发布计划符合预期。
+- 本地与 Agent 环境**严禁**执行 `semifold version` 与 `semifold publish`（含 `--dry-run`）；
+  版本更新、release branch 写入和发布由 GitHub Actions 的 `semifold ci` 独占。
+
+## 7. 安全与日志
 
 - 不得在 `Debug`、错误 `Display`、tracing、fixture 或快照中泄漏完整记录内容或绑定参数值。
 - 连接 URL 中的凭证必须脱敏后才能出现在日志或错误中。
+- 依赖安全由 `cargo deny`（`deny.toml`）与 gitleaks 在 CI 中把关；`deny.toml` 的 license 例外
+  和 advisory ignore 必须逐条注明原因。
 
-## 7. 测试与验证
+## 8. 测试与验证
 
 - driver 必须接入 `toasty-driver-integration-suite` 的共享测试（`Setup` +
   `generate_driver_tests!`），跑内存引擎（`kv-mem`）。
-- 端到端测试使用嵌入式 RocksDB，数据目录在工作目录下的 `.e2e-data/`（已 gitignore）。
-- 交付前运行与改动相称的检查；完整离线质量门禁（见下）在可行时全部执行。
+- 端到端测试使用嵌入式 RocksDB（`rocksdb` feature），数据目录在工作目录下的 `.e2e-data/`
+  （已 gitignore）。
+- 交付前运行与改动相称的检查；CI 的完整门禁如下（本地可行时执行）。三个 DynamoDB 专属负向
+  用例在测试步骤中显式 `--skip`（原因见 `tests/mem.rs`）。
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-targets --all-features
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+cargo fmt --all --check
+cargo check --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked -- \
+  --skip composite_index_too_many_range_columns \
+  --skip composite_unique_index_unsupported_on_dynamodb \
+  --skip starts_with_empty_prefix
+cargo test --test e2e_rocksdb --features rocksdb --locked -- --test-threads=1
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+cargo deny check advisories licenses bans sources
 ```
 
-## 8. Shell 命令
+## 9. Shell 命令
 
 - 搜索文件或文本时优先使用专用搜索工具。
 - e2e RocksDB 数据目录必须保持在 `.gitignore` 覆盖范围内，不得提交。
 
-## 9. 任务完成与交付说明
+## 10. 任务完成与交付说明
 
 完成全部 TODO 后，最终回复必须：
 
