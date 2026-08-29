@@ -6,7 +6,7 @@ use toasty_core::driver::{ExecResponse, operation};
 use toasty_core::schema::db;
 use toasty_core::stmt;
 
-use crate::conn::{Connection, run_query, take_rows};
+use crate::conn::{Connection, take_rows};
 use crate::op::{project_columns, row_to_record};
 use crate::record_id::record_id;
 
@@ -36,7 +36,7 @@ impl Connection {
         let projection = project_columns(table, select.iter().copied());
         let sql = format!("SELECT {projection} FROM {}", targets.join(", "));
 
-        let mut response = run_query(&self.db, sql, binds).await?;
+        let mut response = self.run_query(sql, binds).await?;
         let rows = take_rows(&mut response, 0)?;
 
         let mut records = Vec::with_capacity(rows.len());

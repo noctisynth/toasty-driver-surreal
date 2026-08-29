@@ -21,7 +21,7 @@ Connection}`，把引擎下发的键值 `Operation` 翻译为 SurrealQL，用官
    │  Db::builder().build(SurrealDb::…)
    ▼
 toasty (用户 API + 查询引擎)      —— 上游已发布 crate，不修改
-   │  下发 KV Operation（sql=None 路径）
+   │  下发 KV Operation（sql=None 路径）与显式事务生命周期
    ▼
 toasty-driver-surreal            —— 本仓库
    │  Operation → SurrealQL + 值编解码
@@ -39,8 +39,10 @@ surrealdb 嵌入式 SDK (kv-mem / kv-rocksdb / kv-surrealkv)
 | [Driver Spec](specs/driver.md) | Active Spec（首阶段已实现）| 公共接口、能力画像、值编解码、记录 ID 映射、Operation→SurrealQL、schema、错误、测试门禁 |
 | [RFC 0001：SurrealDB Driver](rfcs/0001-surrealdb-driver.md) | Accepted RFC | KV/文档归类、SDK 选择、PK 映射、依赖方向、被拒方案 |
 | [RFC 0002：SurrealKV 引擎](rfcs/0002-surrealkv-engine.md) | Accepted RFC | SurrealKV SDK feature、构造器、持久化与验证边界 |
+| [RFC 0003：显式事务](rfcs/0003-explicit-transactions.md) | Accepted RFC | 顶层事务生命周期、只读保护、错误分类及非目标 |
 | [SurrealDB SDK Spike](spikes/surrealdb-sdk-3.2.4.md) | Completed Spike | SDK 行为证据、`type::record` 坑、值往返、版本锁定依据 |
 | [SurrealKV Spike](spikes/surrealkv-3.2.4.md) | Completed Spike | SurrealKV 编译、连接、持久化与客户端事务共存证据 |
+| [事务 Spike](spikes/transactions-3.2.4.md) | Completed Spike | SDK commit/cancel、隔离、持久化、savepoint 与 Toasty 路由证据 |
 
 实现前先在本索引定位 Active Spec 或已接受 RFC，再从 [TODO 索引](TODO.md) 进入实施清单。
 
@@ -52,7 +54,11 @@ kv-mem 共享集成测试、RocksDB e2e 与质量门禁均已落地。当前没�
 
 SurrealKV 引擎扩展已由 RFC 0002 接受，并已按 [SurrealKV TODO](todos/surrealkv.md) 落地。
 
-远程引擎、事务、图边、live query、迁移生成、URL scheme 注册与裸 SurrealQL 均属于后续范围。
+显式顶层事务已由 RFC 0003 接受，并已按 [事务 TODO](todos/transactions.md) 落地；driver 继续保持
+`Capability.sql = None`，普通 Toasty batch 不因此宣称自动原子化。
+
+远程引擎、嵌套事务/savepoint、图边、live query、迁移生成、URL scheme 注册与裸 SurrealQL 均属于
+后续范围。
 开始其中任何一项前，先按本文件第 5 节更新设计/RFC/Spec 与实施清单，再修改实现和测试。
 
 ## 5. 变更规则

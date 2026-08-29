@@ -5,13 +5,15 @@
 > 适用范围：`toasty-driver-surreal` crate
 > 设计入口：[设计索引](../DESIGN.md)
 > 决策来源：[RFC 0001：Toasty SurrealDB Driver](../rfcs/0001-surrealdb-driver.md)、
-> [RFC 0002：SurrealKV 引擎](../rfcs/0002-surrealkv-engine.md)
-> 验证证据：[SurrealDB SDK Spike](../spikes/surrealdb-sdk-3.2.4.md)
-> 实施清单：[Driver TODO](../todos/driver.md)
+> [RFC 0002：SurrealKV 引擎](../rfcs/0002-surrealkv-engine.md)、
+> [RFC 0003：显式事务](../rfcs/0003-explicit-transactions.md)
+> 验证证据：[SurrealDB SDK Spike](../spikes/surrealdb-sdk-3.2.4.md)、
+> [事务 Spike](../spikes/transactions-3.2.4.md)
+> 实施清单：[Driver TODO](../todos/driver.md)、[事务 TODO](../todos/transactions.md)
 
 本文冻结 driver 的公共接口、能力画像、值编解码、记录 ID 映射、每个 `Operation` 的 SurrealQL
-翻译、schema 推送、错误分类和测试门禁。没有被本文纳入的行为（事务、远程引擎、图边、迁移
-生成）不得由实现自行补全。
+翻译、schema 推送、显式顶层事务、错误分类和测试门禁。没有被本文纳入的行为（嵌套事务、远程
+引擎、图边、迁移生成）不得由实现自行补全。
 
 ## 1. 范围
 
@@ -22,12 +24,16 @@
   （`kv-surrealkv`）。
 - 覆盖 `Insert`、`GetByKey`、`QueryPk`、`FindPkByIndex`、`Scan`、`UpdateByKey`、`DeleteByKey`、
   `Upsert` 八个 `Operation`。
+- 支持用户显式顶层事务的 `Start`、`Commit`、`Rollback`，保持 KV 能力画像。
 - `push_schema` 定义表与二级索引。
 - 接入 `toasty-driver-integration-suite` 共享测试（`kv-mem`）+ 嵌入式 RocksDB e2e。
 
 ### 1.2 明确非目标
 
-- 事务（`Operation::Transaction`）；引擎按 `capability().sql()` 门控，KV 路径默认不下发。
+- 嵌套事务与 savepoint；SDK 3.2.4 没有对应能力。
+- 显式 isolation level 与非默认 `TransactionMode`。
+- 普通 `toasty::batch` 的自动事务原子性；Toasty 0.10 以 `capability().sql()` 门控该包装，而本
+  driver 必须保持 KV 路径的 `sql = None`。
 - 远程引擎（`ws://`/`http://`）、鉴权、多租户。
 - 图边（`RELATE`）、live query、full-text/vector 检索。
 - SurrealDB schema 迁移生成（`generate_migration` 首阶段 `unimplemented!()`）。
@@ -82,6 +88,8 @@ impl SurrealDb {
 - driver 内部缓存一个共享 `Surreal<Db>` 句柄（对标 Turso 的 `Arc<Mutex<Option<..>>>`），
   所有 `connect()` 复用同一底层库，保证内存库在连接池多 slot 间可见。
 - `connect()` 返回的 `Connection` 持有该句柄克隆并已 `use_ns/use_db`。
+- 每个 `Connection` 同时持有至多一个私有 SDK 客户端事务句柄；事务内数据 query 通过该句柄，
+  finalize 后继续复用稳定的普通句柄。
 - `reset_db()`：内存引擎丢弃缓存句柄；RocksDB/SurrealKV 文件引擎删除数据目录后重建。
 - `max_connections()`：内存引擎返回 `Some(1)`（与 in-memory SQLite 一致，避免多 slot 各开空
   库），RocksDB/SurrealKV 文件引擎返回 `None`。
@@ -238,6 +246,20 @@ feature 开启，默认关闭，因为会额外编译较慢的 `librocksdb`。
 - `Ignore` action：`CREATE $rid CONTENT $data`，`already exists` 冲突被吞（空/0）。
 - 仅支持主键目标（非主键目标 → `unsupported_feature`）。
 
+### 7.9 显式事务
+
+- `Transaction::Start { isolation: None, mode: Default, read_only }`：调用 `db.clone().begin()`，保存
+  `method::Transaction<Db>`；重复 Start 返回结构化错误。
+- `isolation: Some(_)` 或非默认 mode：在 SDK begin 前返回 `unsupported_feature`。
+- 存在活动事务时，§7.1–§7.8 的 SurrealQL 一律经 `tx.query()`；否则经普通 `db.query()`。
+- `read_only = true`：Insert/UpdateByKey/DeleteByKey/Upsert（含 QuerySql 包装的 Insert）在编码值和
+  下发 query 前返回 `read_only_transaction`；读 Operation 与 finalize 仍可用。
+- `Commit` / `Rollback`：先取出并清除活动句柄，再分别调用 `commit()` / `cancel()`；成功返回
+  `ExecResponse::count(0)`。成功或失败后连接都可再次开始事务。
+- `Savepoint` / `ReleaseSavepoint` / `RollbackToSavepoint`：返回 `unsupported_feature`，不改变活动
+  顶层事务。没有活动事务的 Commit/Rollback 同样返回结构化错误。
+- driver 不自动重试冲突；用户必须重试完整显式事务。
+
 ## 8. 过滤表达式翻译（`expr::render`）
 
 对标 DynamoDB 的 `ddb_expression()`：递归把 `stmt::Expr` 翻译为 SurrealQL 布尔表达式，标量以
@@ -265,10 +287,16 @@ feature 开启，默认关闭，因为会额外编译较慢的 `librocksdb`。
 | 连接/会话建立失败、句柄不可用 | `connection_lost` |
 | 唯一冲突（`already exists`）| 由 insert/upsert 路径识别并映射为冲突（`condition_failed` 或引擎期望的冲突变体，依集成测试对齐）|
 | 前置 `condition` 失败 | `condition_failed` |
+| SDK `QueryError::TransactionConflict` | `serialization_failure` |
+| 只读事务中的写 Operation | `read_only_transaction` |
+| 重复 Start 或无活动事务的 Commit/Rollback | `invalid_statement` |
 | 未支持的 Operation/Expr/特性 | `unsupported_feature` |
 | 无效连接配置 | `invalid_connection_url`（若走 URL 解析路径）|
 | 其它 SurrealDB 错误 | `driver_operation_failed` |
 
+- 事务冲突优先按当前错误及公开 cause 链的 `QueryError::TransactionConflict` 分类。嵌入式 commit 在
+  SDK 3.2.4 中会丢失结构化详情，兼容回退为该版本 core 自身测试使用的精确标记
+  `message.contains("Transaction conflict:")`；不得扩大为泛化的 `conflict` 文本匹配。
 - 错误 `Display`/`Debug`/tracing 不得携带完整记录内容或绑定参数值。SurrealDB 原始错误文本在
   保留诊断价值前提下透传给 `driver_operation_failed`，不额外拼接用户数据。
 
@@ -306,7 +334,16 @@ feature 开启，默认关闭，因为会额外编译较慢的 `librocksdb`。
 - SurrealKV 随默认测试运行，并可与 `rocksdb` 同时启用；CI 的默认测试覆盖 SurrealKV e2e。
 - 数据目录同样必须位于 `.e2e-data/` 下并由 `.gitignore` 覆盖。
 
-### 11.4 单元测试
+### 11.4 显式事务（kv-mem + kv-surrealkv）
+
+- driver 专用测试覆盖 commit、rollback、read-your-writes、多 Operation、drop 自动 rollback 与连接
+  复用；共享事务套件当前 `requires(sql)`，不能替代这些用例。
+- 只读写入、isolation、非默认 mode 和 savepoint 使用错误谓词验证结构化拒绝。
+- kv-mem 与 kv-surrealkv 至少各覆盖核心 commit/rollback；SurrealKV 稳定可构造写冲突时验证
+  `is_serialization_failure()`。
+- 普通 batch 不测试也不宣称原子，因为 driver 保持 `Capability.sql = None`。
+
+### 11.5 单元测试
 
 - 值编解码 round-trip（各 `stmt::Value` 变体）。
 - 记录 ID 映射（单列 i64/String/Uuid、复合）。
@@ -321,5 +358,7 @@ feature 开启，默认关闭，因为会额外编译较慢的 `librocksdb`。
 
 ## 13. 实现与文档状态
 
-首个可用实现与 e2e 通过前，README 不得宣称该 driver 已发布可用。实施差异由
-[Driver TODO](../todos/driver.md) 跟踪。
+首阶段 driver、SurrealKV 引擎与显式顶层事务均已满足本规范及对应 RFC；当前没有未完成实施项。
+后续差异分别由 [Driver TODO](../todos/driver.md)、[SurrealKV TODO](../todos/surrealkv.md) 与
+[事务 TODO](../todos/transactions.md) 跟踪。README 只可宣称上述已验证范围，不得把后续非目标描述为
+已支持。

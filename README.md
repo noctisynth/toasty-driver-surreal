@@ -14,9 +14,10 @@ driver is its structural blueprint.
 ## Status
 
 First-stage implementation. **609 of 612** shared Toasty integration-suite
-tests pass against the in-memory engine, plus a RocksDB end-to-end suite. The
-three remaining suite tests are DynamoDB-specific *negative* assertions that
-SurrealDB does not share (see [Known divergences](#known-divergences)).
+tests pass against the in-memory engine, plus SurrealKV/RocksDB end-to-end and
+driver-owned explicit transaction suites. The three remaining shared-suite
+tests are DynamoDB-specific *negative* assertions that SurrealDB does not share
+(see [Known divergences](#known-divergences)).
 
 ## Usage
 
@@ -69,6 +70,29 @@ toasty-driver-surreal = { version = "0.1", features = ["rocksdb"] }
 Namespace and database default to `"toasty"`; override with
 `.namespace(..)` / `.database(..)`.
 
+### Explicit transactions
+
+Top-level explicit transactions work with every embedded engine:
+
+```rust
+let mut tx = db.transaction().await?;
+toasty::create!(User { id: 2, name: "Bob" })
+    .exec(&mut tx)
+    .await?;
+tx.commit().await?;
+```
+
+`transaction_builder().read_only(true)` is supported and rejects writes with
+`Error::read_only_transaction`. Explicit isolation levels, non-default
+`TransactionMode`s, nested transactions, and savepoints are not supported by
+the SurrealDB 3.2.4 client transaction API.
+
+The driver remains a KV/document backend with `Capability::sql = None`.
+Explicit `db.transaction()` calls are atomic, but Toasty 0.10 does not
+automatically wrap an ordinary `toasty::batch` in a transaction for non-SQL
+drivers; callers that need atomicity must execute their operations through an
+explicit transaction handle.
+
 ## Supported
 
 - CRUD by primary key (single-column `i64` / `String` / `Uuid`, and composite
@@ -80,14 +104,18 @@ Namespace and database default to `"toasty"`; override with
 - Secondary indexes (`DEFINE INDEX`, including `UNIQUE` and composite).
 - Native `UPSERT` (create-or-update and insert-or-ignore) with `#[default]` and
   `on_create` semantics.
+- Explicit top-level commit/rollback transactions, read-your-writes, read-only
+  write protection, and serialization-failure classification for write
+  conflicts.
 - `#[document]` embedded structs and collections; temporal / decimal values
   (via `toasty-core`'s `jiff` + `rust_decimal`, stored as canonical text).
 
 ## Not supported (first stage)
 
-Remote engines (`ws://`/`http://`), explicit transactions, graph edges, live
-queries, migration generation, URL-scheme registration, and raw SurrealQL
-pass-through. Each requires a spec update before implementation.
+Remote engines (`ws://`/`http://`), nested transactions/savepoints, explicit
+isolation or non-default lock modes, graph edges, live queries, migration
+generation, URL-scheme registration, and raw SurrealQL pass-through. Each
+requires a spec update before implementation.
 
 ## Known divergences
 
@@ -108,6 +136,7 @@ differences, the driver does not artificially reject them:
 
 ```sh
 cargo test                                   # unit + in-memory suite + smoke
+cargo test --test transactions -- --test-threads=1
 cargo test --test e2e_surrealkv -- --test-threads=1
 cargo test --test e2e_rocksdb --features rocksdb -- --test-threads=1
 ```
@@ -126,8 +155,8 @@ cargo run --example documents_upsert    # #[document] embeds + native UPSERT
 
 ## Design docs
 
-Engineering design lives under `.agents/`: the accepted
-[RFC 0001](.agents/rfcs/0001-surrealdb-driver.md), the
-[active spec](.agents/specs/driver.md), the
-[SDK spike](.agents/spikes/surrealdb-sdk-3.2.4.md), and the
-[implementation checklist](.agents/todos/driver.md).
+Engineering design lives under `.agents/`: accepted
+[driver](.agents/rfcs/0001-surrealdb-driver.md),
+[SurrealKV](.agents/rfcs/0002-surrealkv-engine.md), and
+[transaction](.agents/rfcs/0003-explicit-transactions.md) RFCs; the
+[active spec](.agents/specs/driver.md); and the implementation checklists.

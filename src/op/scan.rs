@@ -46,7 +46,7 @@ impl Connection {
             .unwrap_or_else(|| "id".to_string());
 
         run_keyset_select(
-            &self.db,
+            self,
             KeysetSelect {
                 table_name: &expr::escape_ident(&table.name),
                 projection: &project_columns(table, select.iter().copied()),

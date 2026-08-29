@@ -7,7 +7,7 @@ use toasty_core::driver::{ExecResponse, Rows, operation};
 use toasty_core::schema::db;
 use toasty_core::stmt::{self, ExprContext};
 
-use crate::conn::{Connection, run_query, take_rows};
+use crate::conn::{Connection, take_rows};
 use crate::expr::{self, Binds};
 use crate::op::{project_columns, row_to_record};
 
@@ -42,7 +42,7 @@ impl Connection {
             .unwrap_or_else(|| "id".to_string());
 
         run_keyset_select(
-            &self.db,
+            self,
             KeysetSelect {
                 table_name: &expr::escape_ident(&table.name),
                 projection: &project_columns(table, select.iter().copied()),
@@ -75,7 +75,7 @@ pub(crate) struct KeysetSelect<'a> {
 /// Runs a `SELECT` with optional ordering and pagination, decoding rows and —
 /// for cursor pagination — extracting a keyset `next_cursor` from the last row.
 pub(crate) async fn run_keyset_select(
-    db: &surrealdb::Surreal<surrealdb::engine::local::Db>,
+    connection: &Connection,
     input: KeysetSelect<'_>,
 ) -> toasty_core::Result<ExecResponse> {
     let KeysetSelect {
@@ -140,7 +140,7 @@ pub(crate) async fn run_keyset_select(
     let mut sql = format!("SELECT {projection} FROM {table_name}{where_clause}{order_clause}");
     apply_pagination(&mut sql, &limit.cloned());
 
-    let mut response = run_query(db, sql, binds.into_vec()).await?;
+    let mut response = connection.run_query(sql, binds.into_vec()).await?;
     let rows = take_rows(&mut response, 0)?;
 
     let next_cursor: Option<stmt::Value> = if cursor_mode {

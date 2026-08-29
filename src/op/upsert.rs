@@ -11,7 +11,7 @@ use toasty_core::driver::{ExecResponse, operation};
 use toasty_core::schema::db;
 use toasty_core::stmt;
 
-use crate::conn::{Connection, run_query, take_rows};
+use crate::conn::{Connection, take_rows};
 use crate::op::row_to_record;
 use crate::record_id::record_id;
 use crate::value::to_surreal;
@@ -140,7 +140,7 @@ impl Connection {
                 let mut all_binds = vec![("rid".to_string(), SurValue::RecordId(rid))];
                 all_binds.extend(binds.into_vec());
 
-                let mut response = run_query(&self.db, sql, all_binds).await?;
+                let mut response = self.run_query(sql, all_binds).await?;
                 let rows = take_rows(&mut response, 0)?;
                 finish(returning.as_deref(), rows)
             }
@@ -155,7 +155,7 @@ impl Connection {
                     ("rid".to_string(), SurValue::RecordId(rid)),
                     ("data".to_string(), SurValue::Object(content)),
                 ];
-                match run_query(&self.db, sql, binds).await {
+                match self.run_query(sql, binds).await {
                     Ok(mut response) => {
                         let rows = take_rows(&mut response, 0)?;
                         finish(returning.as_deref(), rows)

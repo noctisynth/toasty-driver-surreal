@@ -5,7 +5,8 @@
 > 最后核对：2026-08-30
 
 任务必须来自 [Driver Spec](specs/driver.md) 或已接受 RFC（当前为
-[RFC 0001](rfcs/0001-surrealdb-driver.md)、[RFC 0002](rfcs/0002-surrealkv-engine.md)）。
+[RFC 0001](rfcs/0001-surrealdb-driver.md)、[RFC 0002](rfcs/0002-surrealkv-engine.md)、
+[RFC 0003](rfcs/0003-explicit-transactions.md)）。
 本索引与 `todos/*.md` 只记录规范与实现之间的差异。
 
 ## 实施清单
@@ -14,6 +15,7 @@
 |---|---|---|---|
 | SurrealDB Driver | [todos/driver.md](todos/driver.md) | Implemented（首阶段） | 无；后续范围需先更新 Spec/RFC 与实施清单 |
 | SurrealKV 引擎 | [todos/surrealkv.md](todos/surrealkv.md) | Implemented | feature、构造器、持久化 e2e 与 CI |
+| 显式事务 | [todos/transactions.md](todos/transactions.md) | Implemented | 顶层生命周期、只读保护、冲突分类与专用测试 |
 
 ## 使用规则
 

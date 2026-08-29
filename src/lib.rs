@@ -30,6 +30,12 @@
 //! [`SurrealDb::surrealkv`]. RocksDB is available behind the `rocksdb` crate
 //! feature via `SurrealDb::rocksdb(path)`.
 //!
+//! Top-level explicit transactions created with Toasty's `Db::transaction()`
+//! are supported. The driver remains non-SQL, so ordinary Toasty batches are
+//! not automatically wrapped in a transaction; use an explicit transaction
+//! handle when atomicity is required. Nested transactions, savepoints,
+//! explicit isolation levels, and non-default transaction modes are rejected.
+//!
 //! Attach the driver with `Db::builder().build(driver)`; the driver does not
 //! register a URL scheme, so `Db::builder().connect(url)` is not used.
 

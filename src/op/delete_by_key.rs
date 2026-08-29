@@ -6,7 +6,7 @@ use toasty_core::driver::{ExecResponse, operation};
 use toasty_core::schema::db;
 use toasty_core::stmt::ExprContext;
 
-use crate::conn::{Connection, run_query, take_rows};
+use crate::conn::{Connection, take_rows};
 use crate::expr::{self, Binds};
 use crate::record_id::record_id;
 
@@ -48,7 +48,7 @@ impl Connection {
 
         // RETURN BEFORE lets us count what was actually deleted.
         let sql = format!("DELETE $rid{where_clause} RETURN BEFORE");
-        let mut response = run_query(&self.db, sql, binds.into_vec()).await?;
+        let mut response = self.run_query(sql, binds.into_vec()).await?;
         let rows = take_rows(&mut response, 0)?;
 
         if rows.is_empty() && op.condition.is_some() {

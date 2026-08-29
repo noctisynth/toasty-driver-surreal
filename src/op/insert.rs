@@ -5,7 +5,7 @@ use toasty_core::driver::ExecResponse;
 use toasty_core::schema::db;
 use toasty_core::stmt;
 
-use crate::conn::{Connection, run_query, take_rows};
+use crate::conn::{Connection, take_rows};
 use crate::record_id::record_id;
 use crate::value::to_surreal;
 
@@ -49,7 +49,7 @@ impl Connection {
                 ("data".to_string(), SurValue::Object(content)),
             ];
 
-            let mut response = run_query(&self.db, sql, binds).await?;
+            let mut response = self.run_query(sql, binds).await?;
             let rows = take_rows(&mut response, 0)?;
 
             if let Some(columns) = &returning {
