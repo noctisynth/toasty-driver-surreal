@@ -12,6 +12,7 @@ categories = ["database"]
 [dependencies]
 async-trait = "0.1.92"
 rust_decimal = "1.42.1"
+serde_json = "1.0.151"
 surrealdb = { version = "3.2.4", default-features = false, features = ["kv-mem", "kv-surrealkv"] }
 toasty-core = { version = "0.10", features = ["jiff", "rust_decimal"] }
 tokio = { version = "1", features = ["sync"] }

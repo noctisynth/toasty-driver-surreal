@@ -55,11 +55,11 @@
 
 ## P5：测试
 
-- [x] `Setup` 实现 + `generate_driver_tests!`（kv-mem）。**609/612 共享用例通过。**
-- [x] 嵌入式 RocksDB e2e（`.e2e-data/`，gitignore）：CRUD、过滤扫描、重开持久化，3/3 通过。
-- [x] 记录 3 个"因 SurrealDB 能力强于 DynamoDB 而无法满足 DynamoDB 负向断言"的用例（见下）。
+- [x] `Setup` 实现 + `generate_driver_tests!`（kv-mem）。**609/616 共享用例直接通过。**
+- [x] 嵌入式 RocksDB e2e（`.e2e-data/`，gitignore）：CRUD、过滤扫描、重开持久化与 native JSON。
+- [x] 记录 7 个共享测试外形分歧（见下）；对应实际能力均有 driver 专用测试。
 
-### 已知分歧（3 个共享用例，非缺陷）
+### 已知分歧（7 个共享用例，非缺陷）
 
 以下用例仅以 `requires(not(sql))` 门控，断言的是 DynamoDB 实现的*限制*；SurrealDB 没有这些
 限制，故正确地成功执行，从而与断言相悖。按 Toasty「不隐藏后端差异」的设计哲学，不通过人为
@@ -68,6 +68,10 @@
 - `index_composite::composite_index_too_many_range_columns`
 - `index_composite::composite_unique_index_unsupported_on_dynamodb`
 - `starts_with::starts_with_empty_prefix`
+
+另有四个 `type_serialize::json*_native_*` 用例硬编码 SQL `QuerySql` + typed params 日志外形，不能
+描述 `sql = None` 的 KV Insert/GetByKey/UpdateByKey 路由。真实 `native_json = true` 行为由
+`tests/native_json.rs` 及文件引擎 e2e 覆盖，详见 [RFC 0004](../rfcs/0004-native-json.md)。
 
 ## P6：质量门禁与文档
 
@@ -93,5 +97,4 @@
 
 ## 后续范围（不在首阶段）
 
-远程引擎、事务、图边、live query、迁移生成、URL scheme 注册、裸 SurrealQL。需各自更新 Spec
-后再实施。
+远程引擎、图边、live query、迁移生成、URL scheme 注册、裸 SurrealQL。需各自更新 Spec 后再实施。

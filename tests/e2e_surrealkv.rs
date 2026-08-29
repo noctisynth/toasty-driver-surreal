@@ -19,6 +19,14 @@ struct User {
     age: i64,
 }
 
+#[derive(Debug, toasty::Model)]
+struct NativeJsonRecord {
+    #[key]
+    id: i64,
+    #[column(type = json)]
+    payload: serde_json::Value,
+}
+
 async fn fresh_driver(slug: &str) -> SurrealDb {
     let path = format!("{}/.e2e-data/surrealkv-{slug}", env!("CARGO_MANIFEST_DIR"));
     let driver = SurrealDb::surrealkv(&path);
@@ -113,6 +121,32 @@ async fn surrealkv_persists_across_reopen() {
     let mut db = open_with_retry(&path).await;
     let got = User::get_by_id(&mut db, 7).await.expect("row persisted");
     assert_eq!(got.name, "Persisted");
+}
+
+#[tokio::test]
+async fn surrealkv_native_json_round_trip() {
+    let driver = fresh_driver("native-json").await;
+    let mut db = Db::builder()
+        .models(toasty::models!(NativeJsonRecord))
+        .build(driver)
+        .await
+        .unwrap();
+    db.push_schema().await.unwrap();
+
+    let payload = serde_json::json!({
+        "engine": "surrealkv",
+        "values": [1, true, null, {"nested": "日本語"}],
+    });
+    toasty::create!(NativeJsonRecord {
+        id: 1,
+        payload: payload.clone(),
+    })
+    .exec(&mut db)
+    .await
+    .unwrap();
+
+    let loaded = NativeJsonRecord::get_by_id(&mut db, 1).await.unwrap();
+    assert_eq!(loaded.payload, payload);
 }
 
 async fn open_with_retry(path: &str) -> Db {

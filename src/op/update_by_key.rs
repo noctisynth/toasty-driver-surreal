@@ -10,7 +10,7 @@ use crate::conn::{Connection, take_rows};
 use crate::expr::{self, Binds};
 use crate::op::row_to_record;
 use crate::record_id::record_id;
-use crate::value::to_surreal;
+use crate::value::to_surreal_for_column;
 
 impl Connection {
     pub(crate) async fn exec_update_by_key(
@@ -41,25 +41,27 @@ impl Connection {
                     sets.push(format!("{name} = NONE"));
                 }
                 stmt::Assignment::Set(stmt::Expr::Value(value)) => {
-                    let placeholder = binds.push(to_surreal(value)?);
+                    let placeholder = binds.push(to_surreal_for_column(value, column)?);
                     sets.push(format!("{name} = {placeholder}"));
                 }
                 stmt::Assignment::Add(stmt::Expr::Value(value)) => {
-                    let placeholder = binds.push(to_surreal(value)?);
+                    let placeholder = binds.push(to_surreal_for_column(value, column)?);
                     sets.push(format!("{name} = {name} + {placeholder}"));
                 }
                 stmt::Assignment::Subtract(stmt::Expr::Value(value)) => {
-                    let placeholder = binds.push(to_surreal(value)?);
+                    let placeholder = binds.push(to_surreal_for_column(value, column)?);
                     sets.push(format!("{name} = {name} - {placeholder}"));
                 }
                 // `push` / `extend` on a `Vec<scalar>` field append a list.
                 // SurrealQL's `+=` concatenates an array onto the field.
                 stmt::Assignment::Append(stmt::Expr::Value(value)) => {
                     let list = match value {
-                        stmt::Value::List(_) => to_surreal(value)?,
+                        stmt::Value::List(_) => to_surreal_for_column(value, column)?,
                         // A single pushed element still arrives as a scalar;
                         // wrap it so `+=` appends one item rather than erroring.
-                        other => to_surreal(&stmt::Value::List(vec![other.clone()]))?,
+                        other => {
+                            to_surreal_for_column(&stmt::Value::List(vec![other.clone()]), column)?
+                        }
                     };
                     let placeholder = binds.push(list);
                     sets.push(format!("{name} += {placeholder}"));

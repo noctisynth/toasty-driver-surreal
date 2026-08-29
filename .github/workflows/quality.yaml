@@ -31,15 +31,20 @@ jobs:
         run: cargo check --workspace --all-targets --locked
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      # The three skipped cases are DynamoDB-specific negative assertions that
-      # SurrealDB does not share; the driver correctly performs the operation,
-      # so they "fail" by succeeding. See tests/mem.rs for the rationale.
+      # Three skipped cases are DynamoDB-specific negative assertions that
+      # SurrealDB does not share. Four native-JSON cases hard-code SQL operation
+      # shapes that cannot describe a KV driver; tests/native_json.rs covers
+      # the equivalent runtime behavior. See tests/mem.rs for the rationale.
       - name: Test (in-memory + SurrealKV)
         run: >-
           cargo test --workspace --locked --
           --skip composite_index_too_many_range_columns
           --skip composite_unique_index_unsupported_on_dynamodb
           --skip starts_with_empty_prefix
+          --skip json_native_round_trip
+          --skip json_value_native_round_trip
+          --skip json_native_nulls
+          --skip json_value_native_nulls
       - name: Documentation
         run: cargo doc --workspace --no-deps --locked
         env:

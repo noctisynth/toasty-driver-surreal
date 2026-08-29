@@ -13,11 +13,12 @@ driver is its structural blueprint.
 
 ## Status
 
-First-stage implementation. **609 of 612** shared Toasty integration-suite
-tests pass against the in-memory engine, plus SurrealKV/RocksDB end-to-end and
-driver-owned explicit transaction suites. The three remaining shared-suite
-tests are DynamoDB-specific *negative* assertions that SurrealDB does not share
-(see [Known divergences](#known-divergences)).
+First-stage implementation plus SurrealKV, explicit transactions, and native
+JSON. **609 of 616** generated shared Toasty integration-suite tests pass
+directly against the in-memory engine. Seven operation-shape assertions are
+excluded for documented upstream-suite reasons, with equivalent driver-owned
+runtime coverage (see [Known divergences](#known-divergences)). SurrealKV and
+RocksDB end-to-end suites cover file-backed behavior.
 
 ## Usage
 
@@ -93,6 +94,27 @@ automatically wrap an ordinary `toasty::batch` in a transaction for non-SQL
 drivers; callers that need atomicity must execute their operations through an
 explicit transaction handle.
 
+### Native JSON
+
+SurrealDB native JSON is available through Toasty's explicit JSON column type:
+
+```rust
+#[derive(Debug, toasty::Model)]
+struct Event {
+    #[key]
+    id: i64,
+    #[column(type = json)]
+    payload: serde_json::Value,
+}
+```
+
+`toasty::Json<T>` works with the same `#[column(type = json)]` declaration.
+Objects, arrays, scalars, and JSON literal `null` are stored as native
+SurrealDB values. `Option<Json<T>>::None` remains a database empty value,
+distinct from `Json<Option<T>>::None` (JSON `null`). The driver reports
+`native_json = true`; `native_jsonb` remains unsupported because SurrealDB has
+no separate JSONB storage contract.
+
 ## Supported
 
 - CRUD by primary key (single-column `i64` / `String` / `Uuid`, and composite
@@ -109,11 +131,13 @@ explicit transaction handle.
   conflicts.
 - `#[document]` embedded structs and collections; temporal / decimal values
   (via `toasty-core`'s `jiff` + `rust_decimal`, stored as canonical text).
+- Native JSON columns for `toasty::Json<T>` and `serde_json::Value`, including
+  database-null versus JSON-null semantics.
 
 ## Not supported (first stage)
 
-Remote engines (`ws://`/`http://`), nested transactions/savepoints, explicit
-isolation or non-default lock modes, graph edges, live queries, migration
+Remote engines (`ws://`/`http://`), native JSONB, nested transactions/savepoints,
+explicit isolation or non-default lock modes, graph edges, live queries, migration
 generation, URL-scheme registration, and raw SurrealQL pass-through. Each
 requires a spec update before implementation.
 
@@ -132,11 +156,18 @@ differences, the driver does not artificially reject them:
 - `starts_with_empty_prefix` — `string::starts_with(x, "")` legitimately
   matches.
 
+Four native-JSON shared tests correctly describe desired data behavior but
+hard-code SQL `QuerySql` + typed-parameter log shapes. A KV driver instead
+uses inline Insert, GetByKey, and UpdateByKey operations, so those four
+operation-shape assertions are skipped; [tests/native_json.rs](tests/native_json.rs)
+and the SurrealKV/RocksDB e2e tests cover the same runtime contract.
+
 ## Testing
 
 ```sh
 cargo test                                   # unit + in-memory suite + smoke
 cargo test --test transactions -- --test-threads=1
+cargo test --test native_json -- --test-threads=1
 cargo test --test e2e_surrealkv -- --test-threads=1
 cargo test --test e2e_rocksdb --features rocksdb -- --test-threads=1
 ```
@@ -157,6 +188,7 @@ cargo run --example documents_upsert    # #[document] embeds + native UPSERT
 
 Engineering design lives under `.agents/`: accepted
 [driver](.agents/rfcs/0001-surrealdb-driver.md),
-[SurrealKV](.agents/rfcs/0002-surrealkv-engine.md), and
-[transaction](.agents/rfcs/0003-explicit-transactions.md) RFCs; the
+[SurrealKV](.agents/rfcs/0002-surrealkv-engine.md),
+[transaction](.agents/rfcs/0003-explicit-transactions.md), and
+[native JSON](.agents/rfcs/0004-native-json.md) RFCs; the
 [active spec](.agents/specs/driver.md); and the implementation checklists.

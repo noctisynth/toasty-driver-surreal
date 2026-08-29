@@ -97,7 +97,8 @@
 - 端到端测试使用嵌入式 RocksDB（`rocksdb` feature），数据目录在工作目录下的 `.e2e-data/`
   （已 gitignore）。
 - 交付前运行与改动相称的检查；CI 的完整门禁如下（本地可行时执行）。三个 DynamoDB 专属负向
-  用例在测试步骤中显式 `--skip`（原因见 `tests/mem.rs`）。
+  用例与四个硬编码 SQL Operation 外形的 native JSON 用例在测试步骤中显式 `--skip`（原因见
+  `tests/mem.rs`）；native JSON 运行时行为由 `tests/native_json.rs` 覆盖。
 
 ```sh
 cargo fmt --all --check
@@ -106,7 +107,11 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked -- \
   --skip composite_index_too_many_range_columns \
   --skip composite_unique_index_unsupported_on_dynamodb \
-  --skip starts_with_empty_prefix
+  --skip starts_with_empty_prefix \
+  --skip json_native_round_trip \
+  --skip json_value_native_round_trip \
+  --skip json_native_nulls \
+  --skip json_value_native_nulls
 cargo test --test e2e_rocksdb --features rocksdb --locked -- --test-threads=1
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 cargo deny check advisories licenses bans sources

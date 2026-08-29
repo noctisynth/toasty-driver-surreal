@@ -7,7 +7,7 @@ use toasty_core::stmt;
 
 use crate::conn::{Connection, take_rows};
 use crate::record_id::record_id;
-use crate::value::to_surreal;
+use crate::value::to_surreal_for_column;
 
 impl Connection {
     pub(crate) async fn exec_insert(
@@ -129,7 +129,7 @@ fn build_row(
                 .unwrap_or(0);
             pk_values.push((pk_pos, value.clone()));
         } else if !value.is_null() {
-            content.insert(column.name.clone(), to_surreal(value)?);
+            content.insert(column.name.clone(), to_surreal_for_column(value, column)?);
         }
     }
 

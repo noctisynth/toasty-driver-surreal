@@ -14,7 +14,7 @@ use toasty_core::stmt;
 use crate::conn::{Connection, take_rows};
 use crate::op::row_to_record;
 use crate::record_id::record_id;
-use crate::value::to_surreal;
+use crate::value::to_surreal_for_column;
 
 impl Connection {
     pub(crate) async fn exec_upsert(
@@ -68,7 +68,7 @@ impl Connection {
                     .unwrap_or(0);
                 pk_values.push((pk_pos, value.clone()));
             } else if !value.is_null() {
-                content.insert(column.name.clone(), to_surreal(value)?);
+                content.insert(column.name.clone(), to_surreal_for_column(value, column)?);
             }
         }
         pk_values.sort_by_key(|(pos, _)| *pos);
@@ -104,16 +104,15 @@ impl Connection {
                         continue;
                     }
                     let name = crate::expr::escape_ident(&column.name);
-                    let ph = binds.push(to_surreal(value)?);
+                    let ph = binds.push(to_surreal_for_column(value, column)?);
                     // Create-only: keep an existing value, set it when absent.
                     sets.push(format!("{name} = {name} ?? {ph}"));
                 }
 
                 for (projection, assignment) in upsert.shared.iter() {
                     let column = table.resolve(projection);
-                    let name = crate::expr::escape_ident(&column.name);
                     render_shared_mutation(
-                        &name,
+                        column,
                         assignment,
                         upsert.defaults.get(projection),
                         &mut binds,
@@ -178,16 +177,17 @@ impl Connection {
 /// Renders one shared upsert mutation into the `SET` clause, folding the
 /// declared create-branch default into operator assignments via `col ?? d`.
 fn render_shared_mutation(
-    name: &str,
+    column: &db::Column,
     assignment: &stmt::Assignment,
     default: Option<&stmt::Assignment>,
     binds: &mut crate::expr::Binds,
     sets: &mut Vec<String>,
 ) -> toasty_core::Result<()> {
+    let name = crate::expr::escape_ident(&column.name);
     let default_placeholder = |binds: &mut crate::expr::Binds| -> toasty_core::Result<String> {
         match default {
             Some(stmt::Assignment::Set(stmt::Expr::Value(value))) => {
-                Ok(binds.push(to_surreal(value)?))
+                Ok(binds.push(to_surreal_for_column(value, column)?))
             }
             _ => Err(toasty_core::Error::invalid_statement(
                 "SurrealDB shared upsert mutation requires a literal #[default] value",
@@ -200,24 +200,24 @@ fn render_shared_mutation(
             sets.push(format!("{name} = NONE"));
         }
         stmt::Assignment::Set(stmt::Expr::Value(value)) => {
-            let ph = binds.push(to_surreal(value)?);
+            let ph = binds.push(to_surreal_for_column(value, column)?);
             sets.push(format!("{name} = {ph}"));
         }
         stmt::Assignment::Add(stmt::Expr::Value(value)) => {
             let d = default_placeholder(binds)?;
-            let ph = binds.push(to_surreal(value)?);
+            let ph = binds.push(to_surreal_for_column(value, column)?);
             sets.push(format!("{name} = ({name} ?? {d}) + {ph}"));
         }
         stmt::Assignment::Subtract(stmt::Expr::Value(value)) => {
             let d = default_placeholder(binds)?;
-            let ph = binds.push(to_surreal(value)?);
+            let ph = binds.push(to_surreal_for_column(value, column)?);
             sets.push(format!("{name} = ({name} ?? {d}) - {ph}"));
         }
         stmt::Assignment::Append(stmt::Expr::Value(value)) => {
             let d = default_placeholder(binds)?;
             let list = match value {
-                stmt::Value::List(_) => to_surreal(value)?,
-                other => to_surreal(&stmt::Value::List(vec![other.clone()]))?,
+                stmt::Value::List(_) => to_surreal_for_column(value, column)?,
+                other => to_surreal_for_column(&stmt::Value::List(vec![other.clone()]), column)?,
             };
             let ph = binds.push(list);
             sets.push(format!("{name} = array::concat({name} ?? {d}, {ph})"));

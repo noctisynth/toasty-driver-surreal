@@ -4,7 +4,7 @@
 //! Each `driver()` call constructs a fresh `SurrealDb::mem()`, so every test
 //! gets an isolated in-memory database; `delete_table` is therefore a no-op.
 //!
-//! # Known divergences (3 tests)
+//! # Known divergences (7 tests)
 //!
 //! The shared suite carries a handful of negative tests, gated only on
 //! `requires(not(sql))`, that assert DynamoDB-implementation-specific
@@ -21,6 +21,11 @@
 //!   (`DEFINE INDEX ... UNIQUE`).
 //! * `starts_with::starts_with_empty_prefix` — DynamoDB rejects empty-string
 //!   key values; SurrealDB's `string::starts_with(x, "")` legitimately matches.
+//! * Four `type_serialize::json*_native_*` tests — their behavior assertions
+//!   are valid, but their operation-log assertions unconditionally require a
+//!   SQL `QuerySql` + typed-parameter shape. This KV driver uses inline Insert,
+//!   GetByKey, and UpdateByKey operations; equivalent behavior is covered by
+//!   `tests/native_json.rs`.
 //!
 //! Every other suite test passes.
 
@@ -47,9 +52,10 @@ impl toasty_driver_integration_suite::Setup for SurrealSetup {
 }
 
 // Generate the shared driver tests. Capability flags mirror the SurrealDB
-// profile: it is a key-value/document backend (`sql: false`) with the same
-// conservative native-type support as DynamoDB, but with ordered scans and
-// primary-key upserts enabled.
+// profile. The upstream 0.10 native-JSON tests hard-code SQL
+// QuerySql/typed-param log shapes, so those four generated tests are skipped
+// by the quality command and equivalent KV behavior is covered in
+// `tests/native_json.rs`.
 toasty_driver_integration_suite::generate_driver_tests!(
     SurrealSetup::new(),
     sql: false,
@@ -59,7 +65,7 @@ toasty_driver_integration_suite::generate_driver_tests!(
     decimal_arbitrary_precision: false,
     native_decimal: false,
     native_varchar: false,
-    native_json: false,
+    native_json: true,
     native_jsonb: false,
     native_ilike: false,
     native_timestamp: false,

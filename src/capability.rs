@@ -37,6 +37,12 @@ pub(crate) fn surrealdb_capability() -> &'static Capability {
         // predicate restriction.
         primary_key_ne_predicate: true,
 
+        // `#[column(type = json)]` values are decoded from Toasty's JSON-text
+        // wire representation into native SurrealDB values. SurrealDB has no
+        // distinct JSONB storage contract, so that capability stays false via
+        // the DynamoDB baseline.
+        native_json: true,
+
         ..Capability::DYNAMODB
     };
 
@@ -63,5 +69,7 @@ mod tests {
         assert!(!cap.scan_supports_sort);
         assert!(cap.index_or_predicate);
         assert!(cap.upsert_primary_key);
+        assert!(cap.native_json);
+        assert!(!cap.native_jsonb);
     }
 }

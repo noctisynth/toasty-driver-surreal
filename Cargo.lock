@@ -6193,6 +6193,7 @@ dependencies = [
  "async-trait",
  "hashbrown 0.17.1",
  "rust_decimal",
+ "serde_json",
  "surrealdb",
  "toasty",
  "toasty-core",

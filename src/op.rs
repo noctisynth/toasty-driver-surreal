@@ -18,7 +18,7 @@ use toasty_core::schema::db::{Column, Table};
 use toasty_core::stmt;
 
 use crate::expr;
-use crate::value::from_surreal;
+use crate::value::from_surreal_for_column;
 
 /// Renders a projection over the given columns, aliasing primary-key columns
 /// out of the record id (`record::id(id) AS <name>`), so the decoded row
@@ -59,7 +59,7 @@ fn row_to_record<'a>(
         let value = object
             .and_then(|obj: &Object| obj.get(column.name.as_str()).cloned())
             .unwrap_or(SurValue::None);
-        fields.push(from_surreal(value, &column.ty)?);
+        fields.push(from_surreal_for_column(value, column)?);
     }
 
     Ok(stmt::ValueRecord::from_vec(fields))

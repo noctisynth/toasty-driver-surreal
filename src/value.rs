@@ -1,18 +1,57 @@
 //! Value codec between Toasty's `stmt::Value`/`stmt::Type` and SurrealDB's
 //! native `surrealdb::types::Value`.
 //!
-//! Encoding and decoding go through the native `Value` (never JSON) so that
+//! General encoding and decoding go directly through native `Value` so that
 //! bytes, UUIDs, and other typed values keep their SurrealDB representation.
-//! See `.agents/spikes/surrealdb-sdk-3.2.4.md` for why the JSON path is lossy.
+//! The one deliberate JSON-text boundary is `db::Type::Json`: Toasty defines
+//! its driver wire format as serialized JSON text, which this module validates
+//! and converts to/from JSON-compatible native SurrealDB values.
 
+use serde_json::Value as JsonValue;
 use surrealdb::types::{Array, Number, Object, Value as SurValue};
+use toasty_core::schema::db::{self, Column};
 use toasty_core::stmt::{self, Type};
 
 /// Encodes a Toasty value as a native SurrealDB value for binding.
 ///
-/// The `U64` case fails with [`toasty_core::Error::unsupported_feature`] when
-/// the value exceeds `i64::MAX`, because SurrealDB integers are `i64`.
+/// A `U64` above `i64::MAX` uses SurrealDB Decimal storage so its magnitude is
+/// preserved.
 pub(crate) fn to_surreal(value: &stmt::Value) -> toasty_core::Result<SurValue> {
+    to_surreal_with_storage(value, None)
+}
+
+/// Encodes a Toasty value using the target column's database storage type.
+///
+/// Toasty's native JSON fields cross the driver boundary as serialized
+/// strings (`stmt::Type::String`) and are distinguishable from ordinary text
+/// only through `Column::storage_ty`. Every column write must therefore use
+/// this entry point rather than the untyped [`to_surreal`] helper.
+pub(crate) fn to_surreal_for_column(
+    value: &stmt::Value,
+    column: &Column,
+) -> toasty_core::Result<SurValue> {
+    to_surreal_with_storage(value, Some(&column.storage_ty))
+}
+
+/// Encodes a Toasty value using an explicitly inferred storage type.
+///
+/// Expression rendering uses this when a literal is compared with a resolved
+/// column but no `Column` object is otherwise carried by the expression node.
+pub(crate) fn to_surreal_for_storage(
+    value: &stmt::Value,
+    storage_ty: &db::Type,
+) -> toasty_core::Result<SurValue> {
+    to_surreal_with_storage(value, Some(storage_ty))
+}
+
+fn to_surreal_with_storage(
+    value: &stmt::Value,
+    storage_ty: Option<&db::Type>,
+) -> toasty_core::Result<SurValue> {
+    if matches!(storage_ty, Some(db::Type::Json)) {
+        return json_text_to_surreal(value);
+    }
+
     Ok(match value {
         stmt::Value::Null => SurValue::Null,
         stmt::Value::Bool(v) => SurValue::Bool(*v),
@@ -76,6 +115,67 @@ pub(crate) fn to_surreal(value: &stmt::Value) -> toasty_core::Result<SurValue> {
     })
 }
 
+/// Parses Toasty's serialized native-JSON wire value into a SurrealDB native
+/// value. A Toasty null is the database-level empty value (`NONE`); the JSON
+/// text `"null"` is the JSON literal (`NULL`).
+fn json_text_to_surreal(value: &stmt::Value) -> toasty_core::Result<SurValue> {
+    match value {
+        stmt::Value::Null => Ok(SurValue::None),
+        stmt::Value::String(text) => {
+            let json: JsonValue = serde_json::from_str(text).map_err(|error| {
+                toasty_core::Error::serialization_failure(format!(
+                    "invalid JSON for a SurrealDB native JSON column at line {}, column {}",
+                    error.line(),
+                    error.column()
+                ))
+            })?;
+            json_value_to_surreal(json)
+        }
+        _ => Err(toasty_core::Error::serialization_failure(
+            "SurrealDB native JSON columns require serialized JSON text or a database null",
+        )),
+    }
+}
+
+/// Converts a validated JSON tree without applying the `#[document]` codec's
+/// null-field omission rule.
+fn json_value_to_surreal(value: JsonValue) -> toasty_core::Result<SurValue> {
+    Ok(match value {
+        JsonValue::Null => SurValue::Null,
+        JsonValue::Bool(value) => SurValue::Bool(value),
+        JsonValue::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                SurValue::Number(Number::Int(value))
+            } else if let Some(value) = value.as_u64() {
+                // SurrealDB integers are i64. Preserve larger JSON u64 values
+                // as Decimal rather than rounding them through f64.
+                SurValue::Number(Number::Decimal(rust_decimal::Decimal::from(value)))
+            } else if let Some(value) = value.as_f64() {
+                SurValue::Number(Number::Float(value))
+            } else {
+                return Err(toasty_core::Error::serialization_failure(
+                    "JSON number cannot be represented by SurrealDB",
+                ));
+            }
+        }
+        JsonValue::String(value) => SurValue::String(value),
+        JsonValue::Array(values) => {
+            let mut out = Vec::with_capacity(values.len());
+            for value in values {
+                out.push(json_value_to_surreal(value)?);
+            }
+            SurValue::Array(Array::from(out))
+        }
+        JsonValue::Object(values) => {
+            let mut out = Object::new();
+            for (name, value) in values {
+                out.insert(name, json_value_to_surreal(value)?);
+            }
+            SurValue::Object(out)
+        }
+    })
+}
+
 /// Decodes a native SurrealDB value into a Toasty value, directed by the
 /// expected column [`Type`].
 ///
@@ -83,6 +183,26 @@ pub(crate) fn to_surreal(value: &stmt::Value) -> toasty_core::Result<SurValue> {
 /// follows the target integer/float type, mirroring the SQLite driver's
 /// `from_sql`.
 pub(crate) fn from_surreal(value: SurValue, ty: &Type) -> toasty_core::Result<stmt::Value> {
+    from_surreal_with_storage(value, ty, None)
+}
+
+/// Decodes a value using the concrete column metadata.
+pub(crate) fn from_surreal_for_column(
+    value: SurValue,
+    column: &Column,
+) -> toasty_core::Result<stmt::Value> {
+    from_surreal_with_storage(value, &column.ty, Some(&column.storage_ty))
+}
+
+fn from_surreal_with_storage(
+    value: SurValue,
+    ty: &Type,
+    storage_ty: Option<&db::Type>,
+) -> toasty_core::Result<stmt::Value> {
+    if matches!(storage_ty, Some(db::Type::Json)) {
+        return surreal_json_to_text(value);
+    }
+
     match value {
         SurValue::None | SurValue::Null => Ok(stmt::Value::Null),
         SurValue::Bool(b) => Ok(stmt::Value::Bool(b)),
@@ -127,6 +247,80 @@ pub(crate) fn from_surreal(value: SurValue, ty: &Type) -> toasty_core::Result<st
             "SurrealDB driver cannot decode value: {other:?}"
         ))),
     }
+}
+
+/// Converts a SurrealDB native JSON value back to Toasty's serialized JSON
+/// wire representation. Only `NONE` maps to Toasty null; `NULL` remains the
+/// non-null JSON text `"null"`.
+fn surreal_json_to_text(value: SurValue) -> toasty_core::Result<stmt::Value> {
+    if matches!(value, SurValue::None) {
+        return Ok(stmt::Value::Null);
+    }
+
+    let json = surreal_to_json_value(value)?;
+    let text = serde_json::to_string(&json).map_err(|error| {
+        toasty_core::Error::serialization_failure(format!(
+            "failed to serialize a SurrealDB native JSON value: {error}"
+        ))
+    })?;
+    Ok(stmt::Value::String(text))
+}
+
+/// Strictly converts only JSON-compatible SurrealDB variants. This avoids the
+/// SDK's best-effort JSON conversion, which would stringify UUIDs, record ids,
+/// and other values that are invalid for this column contract.
+fn surreal_to_json_value(value: SurValue) -> toasty_core::Result<JsonValue> {
+    Ok(match value {
+        SurValue::Null => JsonValue::Null,
+        SurValue::Bool(value) => JsonValue::Bool(value),
+        SurValue::Number(Number::Int(value)) => JsonValue::Number(value.into()),
+        SurValue::Number(Number::Float(value)) => {
+            JsonValue::Number(serde_json::Number::from_f64(value).ok_or_else(|| {
+                toasty_core::Error::serialization_failure(
+                    "SurrealDB native JSON contained a non-finite number",
+                )
+            })?)
+        }
+        SurValue::Number(Number::Decimal(value)) => {
+            let json: JsonValue = serde_json::from_str(&value.to_string()).map_err(|error| {
+                toasty_core::Error::serialization_failure(format!(
+                    "SurrealDB native JSON decimal could not be serialized: {error}"
+                ))
+            })?;
+            if !json.is_number() {
+                return Err(toasty_core::Error::serialization_failure(
+                    "SurrealDB native JSON decimal did not produce a JSON number",
+                ));
+            }
+            json
+        }
+        SurValue::String(value) => JsonValue::String(value),
+        SurValue::Array(values) => {
+            let values = values.into_inner();
+            let mut out = Vec::with_capacity(values.len());
+            for value in values {
+                out.push(surreal_to_json_value(value)?);
+            }
+            JsonValue::Array(out)
+        }
+        SurValue::Object(values) => {
+            let mut out = serde_json::Map::new();
+            for (name, value) in values.into_iter() {
+                out.insert(name, surreal_to_json_value(value)?);
+            }
+            JsonValue::Object(out)
+        }
+        SurValue::None => {
+            return Err(toasty_core::Error::serialization_failure(
+                "SurrealDB native JSON contained an embedded NONE value",
+            ));
+        }
+        _ => {
+            return Err(toasty_core::Error::serialization_failure(
+                "SurrealDB native JSON column contained a non-JSON value",
+            ));
+        }
+    })
 }
 
 /// Narrows a SurrealDB [`Number`] to the target integer/float Toasty value.
@@ -201,5 +395,91 @@ fn record_id_key_to_stmt(
         other => Err(toasty_core::Error::unsupported_feature(format!(
             "SurrealDB driver cannot decode record id key: {other:?}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_json_distinguishes_database_null_from_json_null() {
+        let storage_ty = db::Type::Json;
+
+        assert_eq!(
+            to_surreal_with_storage(&stmt::Value::Null, Some(&storage_ty)).unwrap(),
+            SurValue::None
+        );
+        assert_eq!(
+            to_surreal_with_storage(&stmt::Value::String("null".to_string()), Some(&storage_ty))
+                .unwrap(),
+            SurValue::Null
+        );
+        assert_eq!(
+            from_surreal_with_storage(SurValue::None, &Type::String, Some(&storage_ty)).unwrap(),
+            stmt::Value::Null
+        );
+        assert_eq!(
+            from_surreal_with_storage(SurValue::Null, &Type::String, Some(&storage_ty)).unwrap(),
+            stmt::Value::String("null".to_string())
+        );
+    }
+
+    #[test]
+    fn native_json_preserves_null_object_members() {
+        let storage_ty = db::Type::Json;
+        let input = stmt::Value::String(r#"{"present":null,"items":[1,true]}"#.to_string());
+        let encoded = to_surreal_with_storage(&input, Some(&storage_ty)).unwrap();
+
+        let SurValue::Object(object) = &encoded else {
+            panic!("native JSON object must encode as a SurrealDB object");
+        };
+        assert_eq!(object.get("present"), Some(&SurValue::Null));
+
+        let stmt::Value::String(decoded) =
+            from_surreal_with_storage(encoded, &Type::String, Some(&storage_ty)).unwrap()
+        else {
+            panic!("native JSON object must decode as serialized JSON text");
+        };
+        let stmt::Value::String(input) = input else {
+            unreachable!("test input is JSON text");
+        };
+        assert_eq!(
+            serde_json::from_str::<JsonValue>(&decoded).unwrap(),
+            serde_json::from_str::<JsonValue>(&input).unwrap()
+        );
+    }
+
+    #[test]
+    fn native_json_rejects_invalid_text_without_echoing_it() {
+        let storage_ty = db::Type::Json;
+        let invalid = "{secret-payload";
+        let error =
+            to_surreal_with_storage(&stmt::Value::String(invalid.to_string()), Some(&storage_ty))
+                .unwrap_err();
+
+        assert!(error.is_serialization_failure());
+        assert!(!error.to_string().contains(invalid));
+    }
+
+    #[test]
+    fn native_json_round_trips_top_level_scalars_and_large_unsigned_numbers() {
+        let storage_ty = db::Type::Json;
+
+        for input in ["true", "42", r#""text""#, "18446744073709551615"] {
+            let encoded =
+                to_surreal_with_storage(&stmt::Value::String(input.to_string()), Some(&storage_ty))
+                    .unwrap();
+            let stmt::Value::String(decoded) =
+                from_surreal_with_storage(encoded, &Type::String, Some(&storage_ty)).unwrap()
+            else {
+                panic!("native JSON scalar must decode as serialized JSON text");
+            };
+
+            assert_eq!(
+                serde_json::from_str::<JsonValue>(&decoded).unwrap(),
+                serde_json::from_str::<JsonValue>(input).unwrap()
+            );
+        }
     }
 }

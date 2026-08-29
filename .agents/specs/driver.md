@@ -6,10 +6,13 @@
 > 设计入口：[设计索引](../DESIGN.md)
 > 决策来源：[RFC 0001：Toasty SurrealDB Driver](../rfcs/0001-surrealdb-driver.md)、
 > [RFC 0002：SurrealKV 引擎](../rfcs/0002-surrealkv-engine.md)、
-> [RFC 0003：显式事务](../rfcs/0003-explicit-transactions.md)
+> [RFC 0003：显式事务](../rfcs/0003-explicit-transactions.md)、
+> [RFC 0004：原生 JSON 列](../rfcs/0004-native-json.md)
 > 验证证据：[SurrealDB SDK Spike](../spikes/surrealdb-sdk-3.2.4.md)、
-> [事务 Spike](../spikes/transactions-3.2.4.md)
-> 实施清单：[Driver TODO](../todos/driver.md)、[事务 TODO](../todos/transactions.md)
+> [事务 Spike](../spikes/transactions-3.2.4.md)、
+> [原生 JSON Spike](../spikes/native-json-3.2.4.md)
+> 实施清单：[Driver TODO](../todos/driver.md)、[事务 TODO](../todos/transactions.md)、
+> [原生 JSON TODO](../todos/native-json.md)
 
 本文冻结 driver 的公共接口、能力画像、值编解码、记录 ID 映射、每个 `Operation` 的 SurrealQL
 翻译、schema 推送、显式顶层事务、错误分类和测试门禁。没有被本文纳入的行为（嵌套事务、远程
@@ -25,6 +28,7 @@
 - 覆盖 `Insert`、`GetByKey`、`QueryPk`、`FindPkByIndex`、`Scan`、`UpdateByKey`、`DeleteByKey`、
   `Upsert` 八个 `Operation`。
 - 支持用户显式顶层事务的 `Start`、`Commit`、`Rollback`，保持 KV 能力画像。
+- 支持 `#[column(type = json)]` 的原生 JSON 值与精确空值语义。
 - `push_schema` 定义表与二级索引。
 - 接入 `toasty-driver-integration-suite` 共享测试（`kv-mem`）+ 嵌入式 RocksDB e2e。
 
@@ -39,13 +43,15 @@
 - SurrealDB schema 迁移生成（`generate_migration` 首阶段 `unimplemented!()`）。
 - `Db::builder().connect(url)` 的 scheme 注册（out-of-tree 不可扩展）。
 - 用户裸 SurrealQL（`RawSql` 仅发 SQL driver）。
+- 原生 `JSONB` 能力与数据库层 JSON 字段类型强制。
 
 ## 2. crate 与依赖边界
 
 ### 2.1 依赖
 
 - 生产依赖：`toasty-core`（driver 契约）、`surrealdb`（嵌入式 SDK，Spike 验证的稳定版
-  `3.2.4`，features `kv-mem`、`kv-surrealkv`，可选 `kv-rocksdb`）、`async-trait`、`tracing`。
+  `3.2.4`，features `kv-mem`、`kv-surrealkv`，可选 `kv-rocksdb`）、`serde_json`（native JSON
+  边界转换）、`async-trait`、`tracing`。
 - dev 依赖：`toasty`、`toasty-driver-integration-suite`、`tokio`（`macros`、`rt-multi-thread`）、
   `uuid`。
 - 不依赖 `toasty`（生产）、`toasty-sql`、`Dialect`。
@@ -113,6 +119,7 @@ fn capability(&self) -> &'static Capability {
         index_or_predicate: true,
         upsert_primary_key: true,
         primary_key_ne_predicate: true,
+        native_json: true,
         ..Capability::DYNAMODB
     };
     &CAP
@@ -122,7 +129,9 @@ fn capability(&self) -> &'static Capability {
 - **必须**用 FRU；新增字段自动继承 DYNAMODB。
 - `native_starts_with` 继承 DYNAMODB 的 `true`（SurrealDB 有 `string::starts_with`），driver
   在 `expr::render` 里以带 NULL 守卫的形式渲染。
-- 其余位（`native_json`、`vec_*`、`document_collections`、日期/decimal 等）随 DYNAMODB 基线。
+- `native_json = true`；`native_jsonb = false`（随 DYNAMODB 基线），因为 SurrealDB 没有独立 JSONB
+  存储语义。
+- 其余位（`vec_*`、`document_collections`、日期/decimal 等）随 DYNAMODB 基线。
 - `validate()` 必须通过（单元测试覆盖），运行时 `generate_driver_tests!` 的能力校验也通过。
 
 ## 5. 记录 ID 与主键映射
@@ -178,6 +187,22 @@ crate 特性：本 crate 生产依赖启用 `toasty-core` 的 `jiff` + `rust_dec
 decimal 值可编解码。`net` 未启用。SurrealKV 随默认构建可用；RocksDB 由本 crate 的 `rocksdb`
 feature 开启，默认关闭，因为会额外编译较慢的 `librocksdb`。
 
+### 6.1 原生 JSON 列
+
+`Column.storage_ty == db::Type::Json` 时启用列感知 codec。Toasty 的逻辑值仍是 String：
+
+| Toasty 值 | SurrealDB native 值 | 读取返回 |
+|---|---|---|
+| `Value::Null` | 字段省略 / `Value::None` | `Value::Null` |
+| `Value::String("null")` | `Value::Null` | `Value::String("null")` |
+| 合法 JSON 文本 | Bool/Number/String/Array/Object | 规范 JSON `Value::String` |
+
+JSON object 内部的 null 必须保留，不应用 `#[document]` object 的“跳过 null 字段”规则。JSON 列的
+非法输入或非 JSON-compatible 数据库值返回 `serialization_failure`，错误不包含完整值。
+
+Insert、UpdateByKey、Upsert 与 `row_to_record` 必须传递具体列。filter/condition 的 literal 若与列
+引用比较，必须继承该列的 `storage_ty` 后编码；无列上下文的内部值继续使用通用 codec。
+
 ## 7. Operation → SurrealQL 翻译
 
 所有标量值以绑定参数（`.bind((name, value))`）下发，name 用稳定生成规则（`p0,p1,…`）；记录 ID
@@ -193,6 +218,7 @@ feature 开启，默认关闭，因为会额外编译较慢的 `librocksdb`。
 - 语句：`CREATE $rid CONTENT $data`（有 RETURNING 时加 `RETURN AFTER`）。
 - `$data` 为 object，键为列名；主键列不放入 CONTENT（由 record id 承担），其余非空列放入。
   多行 insert 循环执行。
+- 每个 CONTENT 值按目标列 `storage_ty` 编码，JSON 列由 §6.1 转为 native value。
 - 返回：有 RETURNING 投影时解码为行；否则返回受影响计数。冲突（`already exists`）见 §9。
 
 ### 7.2 GetByKey
@@ -228,6 +254,7 @@ feature 开启，默认关闭，因为会额外编译较慢的 `librocksdb`。
 - `op.assignments`：`Set` → `col = $v`（`Null` → `col = NONE`）；`Add/Subtract` →
   `col = col ± $v`；`Append`（push/extend）→ `col += $list`（单元素自动包成 list）。其它变体
   返回 `unsupported_feature`（带 `_` 通配臂）。
+- literal 与 default 按赋值目标列编码，避免 JSON SET/UPSERT 退化为字符串。
 - `op.condition` 失败（更新 0 行）→ `Error::condition_failed`。
 - `op.returning`：`Some` → `RETURN AFTER` 解码；`None` → 返回计数。
 
@@ -288,6 +315,7 @@ feature 开启，默认关闭，因为会额外编译较慢的 `librocksdb`。
 | 唯一冲突（`already exists`）| 由 insert/upsert 路径识别并映射为冲突（`condition_failed` 或引擎期望的冲突变体，依集成测试对齐）|
 | 前置 `condition` 失败 | `condition_failed` |
 | SDK `QueryError::TransactionConflict` | `serialization_failure` |
+| native JSON 文本无效或数据库值不兼容 JSON | `serialization_failure` |
 | 只读事务中的写 Operation | `read_only_transaction` |
 | 重复 Start 或无活动事务的 Commit/Rollback | `invalid_statement` |
 | 未支持的 Operation/Expr/特性 | `unsupported_feature` |
@@ -320,6 +348,9 @@ feature 开启，默认关闭，因为会额外编译较慢的 `librocksdb`。
 - 用 `generate_driver_tests!(SurrealSetup::new(), <capability flags>)` 生成共享测试；不支持的
   能力位以 `flag: false` 声明，使套件跳过对应用例。
 - 目标：create/get/update/delete/upsert/query/index/分页/值往返用例通过；逐位调能力直至绿。
+- `native_json` 生成开关与真实能力同为 `true`，但 Toasty 0.10 的四个 native JSON 用例把日志外形
+  硬编码为 SQL `QuerySql` + typed params；质量门禁按测试名跳过其外形断言，运行时契约由 §11.5
+  的 driver 专用测试覆盖。
 
 ### 11.2 端到端（kv-rocksdb）
 
@@ -343,7 +374,14 @@ feature 开启，默认关闭，因为会额外编译较慢的 `librocksdb`。
   `is_serialization_failure()`。
 - 普通 batch 不测试也不宣称原子，因为 driver 保持 `Capability.sql = None`。
 
-### 11.5 单元测试
+### 11.5 原生 JSON（kv-mem + 文件引擎）
+
+- driver 专用测试覆盖 `toasty::Json<T>`、`serde_json::Value`、object/array/scalar、数据库空值与
+  JSON null、UpdateByKey、Upsert 和整值谓词；
+- kv-surrealkv 与 kv-rocksdb 各覆盖至少一组 native JSON 文件引擎往返；
+- codec 单元测试验证内部 null 字段、非法 JSON 的 `serialization_failure` 与错误不泄漏载荷。
+
+### 11.6 单元测试
 
 - 值编解码 round-trip（各 `stmt::Value` 变体）。
 - 记录 ID 映射（单列 i64/String/Uuid、复合）。
@@ -358,7 +396,8 @@ feature 开启，默认关闭，因为会额外编译较慢的 `librocksdb`。
 
 ## 13. 实现与文档状态
 
-首阶段 driver、SurrealKV 引擎与显式顶层事务均已满足本规范及对应 RFC；当前没有未完成实施项。
+首阶段 driver、SurrealKV 引擎与显式顶层事务均已满足本规范及对应 RFC；原生 JSON 按 RFC 0004
+实施并由专用测试覆盖。
 后续差异分别由 [Driver TODO](../todos/driver.md)、[SurrealKV TODO](../todos/surrealkv.md) 与
-[事务 TODO](../todos/transactions.md) 跟踪。README 只可宣称上述已验证范围，不得把后续非目标描述为
-已支持。
+[事务 TODO](../todos/transactions.md)、[原生 JSON TODO](../todos/native-json.md) 跟踪。README 只可
+宣称上述已验证范围，不得把后续非目标描述为已支持。

@@ -18,7 +18,7 @@ use surrealdb::types::Value as SurValue;
 use toasty_core::schema::db::{self, Column, Table};
 use toasty_core::stmt::{self, BinaryOp, ExprContext};
 
-use crate::value::to_surreal;
+use crate::value::{to_surreal, to_surreal_for_storage};
 
 /// Accumulates bound parameters produced while rendering an expression.
 ///
@@ -87,10 +87,26 @@ pub(crate) fn render(
     binds: &mut Binds,
     expr: &stmt::Expr,
 ) -> toasty_core::Result<String> {
+    render_with_storage(cx, table, binds, expr, None)
+}
+
+/// Internal renderer carrying a storage-type hint for literal nodes. The hint
+/// comes from the column on the other side of a comparison and is essential
+/// for native JSON, whose Toasty wire value is otherwise indistinguishable
+/// from an ordinary string.
+fn render_with_storage(
+    cx: &ExprContext<'_, db::Schema>,
+    table: &Table,
+    binds: &mut Binds,
+    expr: &stmt::Expr,
+    storage_ty: Option<&db::Type>,
+) -> toasty_core::Result<String> {
     match expr {
         stmt::Expr::BinaryOp(op) => {
-            let lhs = render(cx, table, binds, &op.lhs)?;
-            let rhs = render(cx, table, binds, &op.rhs)?;
+            let lhs_storage = expression_storage_ty(cx, &op.lhs);
+            let rhs_storage = expression_storage_ty(cx, &op.rhs);
+            let lhs = render_with_storage(cx, table, binds, &op.lhs, rhs_storage.as_ref())?;
+            let rhs = render_with_storage(cx, table, binds, &op.rhs, lhs_storage.as_ref())?;
             let sym = match op.op {
                 BinaryOp::Eq => "=",
                 BinaryOp::Ne => "!=",
@@ -120,7 +136,7 @@ pub(crate) fn render(
             Ok(format!("({})", parts.join(" OR ")))
         }
         stmt::Expr::Not(not) => {
-            let inner = render(cx, table, binds, &not.expr)?;
+            let inner = render_with_storage(cx, table, binds, &not.expr, None)?;
             // SurrealQL rejects `NOT x IS NONE`; use the `!( ... )` prefix form,
             // which parses correctly around any predicate.
             Ok(format!("!({inner})"))
@@ -138,21 +154,25 @@ pub(crate) fn render(
                 stmt::Expr::Func(stmt::ExprFunc::JsonExtract(func)) => {
                     document_path(cx, table, func)
                 }
-                other => render(cx, table, binds, other)?,
+                other => render_with_storage(cx, table, binds, other, None)?,
             };
             Ok(format!("{inner} IS NONE"))
         }
         stmt::Expr::Between(between) => {
-            let target = render(cx, table, binds, &between.expr)?;
-            let low = render(cx, table, binds, &between.low)?;
-            let high = render(cx, table, binds, &between.high)?;
+            let target_storage = expression_storage_ty(cx, &between.expr);
+            let target = render_with_storage(cx, table, binds, &between.expr, None)?;
+            let low = render_with_storage(cx, table, binds, &between.low, target_storage.as_ref())?;
+            let high =
+                render_with_storage(cx, table, binds, &between.high, target_storage.as_ref())?;
             // Render as two comparisons; SurrealQL has no chained relational
             // operator with defined associativity.
             Ok(format!("({target} >= {low} AND {target} <= {high})"))
         }
         stmt::Expr::InList(in_list) => {
-            let target = render(cx, table, binds, &in_list.expr)?;
-            let list = render(cx, table, binds, &in_list.list)?;
+            let target_storage = expression_storage_ty(cx, &in_list.expr);
+            let target = render_with_storage(cx, table, binds, &in_list.expr, None)?;
+            let list =
+                render_with_storage(cx, table, binds, &in_list.list, target_storage.as_ref())?;
             Ok(format!("{target} IN {list}"))
         }
         stmt::Expr::AnyOp(any) => {
@@ -165,27 +185,34 @@ pub(crate) fn render(
                     any.op
                 )));
             }
-            let value = render(cx, table, binds, &any.lhs)?;
-            let list = render(cx, table, binds, &any.rhs)?;
+            let rhs_storage = expression_storage_ty(cx, &any.rhs);
+            let value = render_with_storage(cx, table, binds, &any.lhs, rhs_storage.as_ref())?;
+            let list = render_with_storage(cx, table, binds, &any.rhs, None)?;
             Ok(format!("{list} CONTAINS {value}"))
         }
         stmt::Expr::IsSuperset(sup) => {
-            let lhs = render(cx, table, binds, &sup.lhs)?;
-            let rhs = render(cx, table, binds, &sup.rhs)?;
+            let lhs_storage = expression_storage_ty(cx, &sup.lhs);
+            let rhs_storage = expression_storage_ty(cx, &sup.rhs);
+            let lhs = render_with_storage(cx, table, binds, &sup.lhs, rhs_storage.as_ref())?;
+            let rhs = render_with_storage(cx, table, binds, &sup.rhs, lhs_storage.as_ref())?;
             Ok(format!("{lhs} CONTAINSALL {rhs}"))
         }
         stmt::Expr::Intersects(int) => {
-            let lhs = render(cx, table, binds, &int.lhs)?;
-            let rhs = render(cx, table, binds, &int.rhs)?;
+            let lhs_storage = expression_storage_ty(cx, &int.lhs);
+            let rhs_storage = expression_storage_ty(cx, &int.rhs);
+            let lhs = render_with_storage(cx, table, binds, &int.lhs, rhs_storage.as_ref())?;
+            let rhs = render_with_storage(cx, table, binds, &int.rhs, lhs_storage.as_ref())?;
             Ok(format!("{lhs} CONTAINSANY {rhs}"))
         }
         stmt::Expr::Length(len) => {
-            let inner = render(cx, table, binds, &len.expr)?;
+            let inner = render_with_storage(cx, table, binds, &len.expr, None)?;
             Ok(format!("array::len({inner})"))
         }
         stmt::Expr::StartsWith(sw) => {
-            let target = render(cx, table, binds, &sw.expr)?;
-            let prefix = render(cx, table, binds, &sw.prefix)?;
+            let target_storage = expression_storage_ty(cx, &sw.expr);
+            let target = render_with_storage(cx, table, binds, &sw.expr, None)?;
+            let prefix =
+                render_with_storage(cx, table, binds, &sw.prefix, target_storage.as_ref())?;
             // Guard against NULL/absent values: `string::starts_with` errors on
             // a non-string argument, and an absent optional field never matches
             // a prefix.
@@ -209,17 +236,35 @@ pub(crate) fn render(
                 Ok(reference)
             }
         }
-        stmt::Expr::Value(value) => value_to_binds(binds, value),
+        stmt::Expr::Value(value) => value_to_binds(binds, value, storage_ty),
         stmt::Expr::List(list) => {
             let mut parts = Vec::with_capacity(list.items.len());
             for item in &list.items {
-                parts.push(render(cx, table, binds, item)?);
+                parts.push(render_with_storage(cx, table, binds, item, storage_ty)?);
             }
             Ok(format!("[{}]", parts.join(", ")))
         }
         other => Err(toasty_core::Error::unsupported_feature(format!(
             "SurrealDB driver cannot translate filter expression: {other:?}"
         ))),
+    }
+}
+
+/// Resolves the database storage type carried by a column-shaped expression.
+/// Returning an owned type keeps the renderer's lifetimes simple and is cheap
+/// compared with issuing the database query.
+fn expression_storage_ty(cx: &ExprContext<'_, db::Schema>, expr: &stmt::Expr) -> Option<db::Type> {
+    match expr {
+        stmt::Expr::Reference(reference) => Some(
+            cx.resolve_expr_reference(reference)
+                .as_column_unwrap()
+                .storage_ty
+                .clone(),
+        ),
+        stmt::Expr::Func(stmt::ExprFunc::JsonExtract(func)) => {
+            expression_storage_ty(cx, &func.base)
+        }
+        _ => None,
     }
 }
 
@@ -264,16 +309,30 @@ fn render_operands(
 
 /// Binds a literal value. A [`stmt::Value::List`] renders as a SurrealQL array
 /// literal so `IN` receives a real list operand rather than one opaque param.
-fn value_to_binds(binds: &mut Binds, value: &stmt::Value) -> toasty_core::Result<String> {
+fn value_to_binds(
+    binds: &mut Binds,
+    value: &stmt::Value,
+    storage_ty: Option<&db::Type>,
+) -> toasty_core::Result<String> {
     match value {
         stmt::Value::List(items) => {
             let mut parts = Vec::with_capacity(items.len());
             for item in items {
-                parts.push(binds.push(to_surreal(item)?));
+                let value = match storage_ty {
+                    Some(storage_ty) => to_surreal_for_storage(item, storage_ty)?,
+                    None => to_surreal(item)?,
+                };
+                parts.push(binds.push(value));
             }
             Ok(format!("[{}]", parts.join(", ")))
         }
-        other => Ok(binds.push(to_surreal(other)?)),
+        other => {
+            let value = match storage_ty {
+                Some(storage_ty) => to_surreal_for_storage(other, storage_ty)?,
+                None => to_surreal(other)?,
+            };
+            Ok(binds.push(value))
+        }
     }
 }
 
