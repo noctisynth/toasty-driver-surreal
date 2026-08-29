@@ -34,7 +34,7 @@ jobs:
       # The three skipped cases are DynamoDB-specific negative assertions that
       # SurrealDB does not share; the driver correctly performs the operation,
       # so they "fail" by succeeding. See tests/mem.rs for the rationale.
-      - name: Test (in-memory engine)
+      - name: Test (in-memory + SurrealKV)
         run: >-
           cargo test --workspace --locked --
           --skip composite_index_too_many_range_columns

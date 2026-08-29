@@ -4,7 +4,8 @@
 > 规范基线：2026-08-26
 > 适用范围：`toasty-driver-surreal` crate
 > 设计入口：[设计索引](../DESIGN.md)
-> 决策来源：[RFC 0001：Toasty SurrealDB Driver](../rfcs/0001-surrealdb-driver.md)
+> 决策来源：[RFC 0001：Toasty SurrealDB Driver](../rfcs/0001-surrealdb-driver.md)、
+> [RFC 0002：SurrealKV 引擎](../rfcs/0002-surrealkv-engine.md)
 > 验证证据：[SurrealDB SDK Spike](../spikes/surrealdb-sdk-3.2.4.md)
 > 实施清单：[Driver TODO](../todos/driver.md)
 
@@ -17,7 +18,8 @@
 ### 1.1 首阶段目标
 
 - 实现 `toasty_core::driver::{Driver, Connection}`，作为 KV/文档 driver（`sql = None`）。
-- 支持嵌入式引擎：内存（`kv-mem`）与文件 RocksDB（`kv-rocksdb`）。
+- 支持嵌入式引擎：内存（`kv-mem`）、文件 RocksDB（`kv-rocksdb`）与文件 SurrealKV
+  （`kv-surrealkv`）。
 - 覆盖 `Insert`、`GetByKey`、`QueryPk`、`FindPkByIndex`、`Scan`、`UpdateByKey`、`DeleteByKey`、
   `Upsert` 八个 `Operation`。
 - `push_schema` 定义表与二级索引。
@@ -37,7 +39,7 @@
 ### 2.1 依赖
 
 - 生产依赖：`toasty-core`（driver 契约）、`surrealdb`（嵌入式 SDK，Spike 验证的稳定版
-  `3.2.4`，features `kv-mem`、`kv-rocksdb`）、`async-trait`、`tracing`。
+  `3.2.4`，features `kv-mem`、`kv-surrealkv`，可选 `kv-rocksdb`）、`async-trait`、`tracing`。
 - dev 依赖：`toasty`、`toasty-driver-integration-suite`、`tokio`（`macros`、`rt-multi-thread`）、
   `uuid`。
 - 不依赖 `toasty`（生产）、`toasty-sql`、`Dialect`。
@@ -61,6 +63,9 @@ impl SurrealDb {
     /// 嵌入式 RocksDB 文件引擎（kv-rocksdb），path 为数据目录。
     pub fn rocksdb(path: impl Into<std::path::PathBuf>) -> Self;
 
+    /// 嵌入式 SurrealKV 文件引擎（kv-surrealkv），path 为数据目录。
+    pub fn surrealkv(path: impl Into<std::path::PathBuf>) -> Self;
+
     /// 设置 namespace 与 database，默认 "toasty" / "toasty"。
     pub fn namespace(self, ns: impl Into<String>) -> Self;
     pub fn database(self, db: impl Into<String>) -> Self;
@@ -68,7 +73,8 @@ impl SurrealDb {
 ```
 
 - 首阶段用 `Db::builder().models(..).build(SurrealDb::mem())` 接入，不经 `connect(url)`。
-- `Driver::url()` 返回信息性字符串：内存 `surrealdb:mem`，文件 `surrealdb:rocksdb:<path>`。
+- `Driver::url()` 返回信息性字符串：内存 `surrealdb:mem`，文件
+  `surrealdb:rocksdb:<path>` / `surrealdb:surrealkv:<path>`。
   出现在日志中的 URL 不含凭证（首阶段嵌入式无凭证）。
 
 ### 3.1 连接与共享实例
@@ -76,9 +82,9 @@ impl SurrealDb {
 - driver 内部缓存一个共享 `Surreal<Db>` 句柄（对标 Turso 的 `Arc<Mutex<Option<..>>>`），
   所有 `connect()` 复用同一底层库，保证内存库在连接池多 slot 间可见。
 - `connect()` 返回的 `Connection` 持有该句柄克隆并已 `use_ns/use_db`。
-- `reset_db()`：内存引擎丢弃缓存句柄；文件引擎删除数据目录后重建。
+- `reset_db()`：内存引擎丢弃缓存句柄；RocksDB/SurrealKV 文件引擎删除数据目录后重建。
 - `max_connections()`：内存引擎返回 `Some(1)`（与 in-memory SQLite 一致，避免多 slot 各开空
-  库），文件引擎返回 `None`。
+  库），RocksDB/SurrealKV 文件引擎返回 `None`。
 
 ## 4. 能力画像
 
@@ -161,8 +167,8 @@ fn capability(&self) -> &'static Capability {
 → 依主键列类型反解为标量或 `Record`。未覆盖的组合返回结构化错误，不 panic。
 
 crate 特性：本 crate 生产依赖启用 `toasty-core` 的 `jiff` + `rust_decimal`，使 temporal 与
-decimal 值可编解码。`net` 未启用。RocksDB 引擎由本 crate 的 `rocksdb` feature 开启
-（默认关闭，编译 `librocksdb` 较慢）。
+decimal 值可编解码。`net` 未启用。SurrealKV 随默认构建可用；RocksDB 由本 crate 的 `rocksdb`
+feature 开启，默认关闭，因为会额外编译较慢的 `librocksdb`。
 
 ## 7. Operation → SurrealQL 翻译
 
@@ -293,7 +299,14 @@ decimal 值可编解码。`net` 未启用。RocksDB 引擎由本 crate 的 `rock
   证明文件引擎可用。
 - 数据目录在工作目录 `.e2e-data/` 下，**必须**被 `.gitignore` 覆盖；测试开始前清理残留目录。
 
-### 11.3 单元测试
+### 11.3 端到端（kv-surrealkv）
+
+- 独立测试文件用 `SurrealDb::surrealkv(".e2e-data/surrealkv-<test>")` 运行与 RocksDB 对等的
+  CRUD、过滤扫描和跨重开持久化场景。
+- SurrealKV 随默认测试运行，并可与 `rocksdb` 同时启用；CI 的默认测试覆盖 SurrealKV e2e。
+- 数据目录同样必须位于 `.e2e-data/` 下并由 `.gitignore` 覆盖。
+
+### 11.4 单元测试
 
 - 值编解码 round-trip（各 `stmt::Value` 变体）。
 - 记录 ID 映射（单列 i64/String/Uuid、复合）。

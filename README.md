@@ -52,13 +52,15 @@ async fn main() -> toasty::Result<()> {
 
 ### Engines
 
-| Constructor | Engine | Feature |
+| Constructor | Engine | Availability |
 |---|---|---|
 | `SurrealDb::mem()` | in-memory (`kv-mem`) | default |
-| `SurrealDb::rocksdb(path)` | embedded file (`kv-rocksdb`) | `rocksdb` |
+| `SurrealDb::surrealkv(path)` | embedded file (`kv-surrealkv`) | default |
+| `SurrealDb::rocksdb(path)` | embedded file (`kv-rocksdb`) | `rocksdb` feature |
 
-The `rocksdb` feature is off by default because it compiles `librocksdb` from
-source. Enable it for the file-backed engine:
+SurrealKV is SurrealDB's native file-backed engine and is available without an
+extra crate feature. The `rocksdb` feature is off by default because it compiles
+`librocksdb` from source. Enable it for the RocksDB engine:
 
 ```toml
 toasty-driver-surreal = { version = "0.1", features = ["rocksdb"] }
@@ -106,10 +108,11 @@ differences, the driver does not artificially reject them:
 
 ```sh
 cargo test                                   # unit + in-memory suite + smoke
+cargo test --test e2e_surrealkv -- --test-threads=1
 cargo test --test e2e_rocksdb --features rocksdb -- --test-threads=1
 ```
 
-The RocksDB e2e tests write to `.e2e-data/` (git-ignored).
+The SurrealKV and RocksDB e2e tests write to `.e2e-data/` (git-ignored).
 
 ## Examples
 

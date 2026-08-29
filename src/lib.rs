@@ -26,8 +26,9 @@
 //! # }
 //! ```
 //!
-//! A file-backed embedded RocksDB engine is available behind the `rocksdb`
-//! crate feature via `SurrealDb::rocksdb(path)`.
+//! A file-backed embedded SurrealKV engine is available via
+//! [`SurrealDb::surrealkv`]. RocksDB is available behind the `rocksdb` crate
+//! feature via `SurrealDb::rocksdb(path)`.
 //!
 //! Attach the driver with `Db::builder().build(driver)`; the driver does not
 //! register a URL scheme, so `Db::builder().connect(url)` is not used.
@@ -40,7 +41,6 @@ mod record_id;
 mod value;
 
 use std::borrow::Cow;
-#[cfg(feature = "rocksdb")]
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -59,6 +59,8 @@ pub use conn::Connection;
 enum Engine {
     /// In-memory (`kv-mem`). Every fresh database starts empty.
     Mem,
+    /// File-backed embedded SurrealKV (`kv-surrealkv`) at the given path.
+    SurrealKv(PathBuf),
     /// File-backed embedded RocksDB (`kv-rocksdb`) at the given path.
     ///
     /// Only available with the `rocksdb` crate feature.
@@ -68,10 +70,11 @@ enum Engine {
 
 /// A SurrealDB [`Driver`] backed by the embedded `surrealdb` SDK.
 ///
-/// Construct with [`SurrealDb::mem`] (in-memory) or `SurrealDb::rocksdb`
-/// (file-backed, requires the `rocksdb` feature), optionally overriding the
-/// namespace and database with [`SurrealDb::namespace`] /
-/// [`SurrealDb::database`]. Attach it with `Db::builder().build(driver)`.
+/// Construct with [`SurrealDb::mem`] (in-memory), [`SurrealDb::surrealkv`]
+/// (file-backed), or `SurrealDb::rocksdb` (file-backed, requires the `rocksdb`
+/// feature), optionally overriding the namespace and database with
+/// [`SurrealDb::namespace`] / [`SurrealDb::database`]. Attach it with
+/// `Db::builder().build(driver)`.
 #[derive(Clone)]
 pub struct SurrealDb {
     engine: Engine,
@@ -100,6 +103,12 @@ impl SurrealDb {
     /// Create an in-memory (`kv-mem`) SurrealDB driver.
     pub fn mem() -> Self {
         Self::with_engine(Engine::Mem)
+    }
+
+    /// Create a file-backed embedded SurrealKV (`kv-surrealkv`) driver rooted
+    /// at `path`.
+    pub fn surrealkv(path: impl Into<PathBuf>) -> Self {
+        Self::with_engine(Engine::SurrealKv(path.into()))
     }
 
     /// Create a file-backed embedded RocksDB (`kv-rocksdb`) SurrealDB driver
@@ -141,6 +150,11 @@ impl SurrealDb {
                 Engine::Mem => Surreal::new::<surrealdb::engine::local::Mem>(())
                     .await
                     .map_err(conn::classify_error)?,
+                Engine::SurrealKv(path) => {
+                    Surreal::new::<surrealdb::engine::local::SurrealKv>(path.as_path())
+                        .await
+                        .map_err(conn::classify_error)?
+                }
                 #[cfg(feature = "rocksdb")]
                 Engine::RocksDb(path) => {
                     Surreal::new::<surrealdb::engine::local::RocksDb>(path.as_path())
@@ -168,6 +182,9 @@ impl Driver for SurrealDb {
     fn url(&self) -> Cow<'_, str> {
         match &self.engine {
             Engine::Mem => Cow::Borrowed("surrealdb:mem"),
+            Engine::SurrealKv(path) => {
+                Cow::Owned(format!("surrealdb:surrealkv:{}", path.display()))
+            }
             #[cfg(feature = "rocksdb")]
             Engine::RocksDb(path) => Cow::Owned(format!("surrealdb:rocksdb:{}", path.display())),
         }
@@ -191,6 +208,7 @@ impl Driver for SurrealDb {
         // the in-memory SQLite driver.
         match self.engine {
             Engine::Mem => Some(1),
+            Engine::SurrealKv(_) => None,
             #[cfg(feature = "rocksdb")]
             Engine::RocksDb(_) => None,
         }
@@ -206,8 +224,14 @@ impl Driver for SurrealDb {
         // Drop the cached handle so the next connect starts fresh.
         self.handle.lock().await.take();
 
-        #[cfg(feature = "rocksdb")]
-        if let Engine::RocksDb(path) = &self.engine
+        let file_path = match &self.engine {
+            Engine::Mem => None,
+            Engine::SurrealKv(path) => Some(path),
+            #[cfg(feature = "rocksdb")]
+            Engine::RocksDb(path) => Some(path),
+        };
+
+        if let Some(path) = file_path
             && path.exists()
         {
             std::fs::remove_dir_all(path).map_err(toasty_core::Error::driver_operation_failed)?;
