@@ -54,8 +54,9 @@ SurrealKV 与 RocksDB 可同时编译和使用。两者使用相同的值编解�
 ## 5. 依赖与安全
 
 仍锁定 `surrealdb 3.2.4`；该版本的 `kv-surrealkv` 解析到兼容的 `surrealkv 0.21.x`。SurrealKV
-为 Apache-2.0，已有 license allowlist 覆盖。项目不声明 MSRV；启用 feature 时实际 Rust 下限仍受
-上游 `surrealkv` 约束。
+本身为 Apache-2.0；其 `xxhash-rust` 传递依赖使用宽松的 BSL-1.0（Boost Software License），在
+`deny.toml` 中按 crate 单独注明原因并放行，不扩大全局 license allowlist。项目不声明 MSRV；启用
+feature 时实际 Rust 下限仍受上游 `surrealkv` 约束。
 
 ## 6. 验收标准
 

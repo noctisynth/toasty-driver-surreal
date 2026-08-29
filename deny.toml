@@ -45,6 +45,10 @@ exceptions = [
   # ext-sort (a transitive surrealdb-core dependency) is public-domain
   # (Unlicense); allow it explicitly rather than widening the global list.
   { allow = ["Unlicense"], crate = "ext-sort" },
+  # xxhash-rust is pulled in by the SurrealKV storage engine. Its Boost
+  # Software License is permissive; keep the exception scoped to this crate
+  # instead of widening the global allowlist.
+  { allow = ["BSL-1.0"], crate = "xxhash-rust" },
 ]
 
 [bans]
