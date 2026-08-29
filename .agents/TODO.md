@@ -1,8 +1,8 @@
 # TODO 索引
 
-> 状态：Active
+> 状态：Active（当前无未完成实施项）
 > 作用：全项目实施清单入口
-> 最后核对：2026-08-26
+> 最后核对：2026-08-30
 
 任务必须来自 [Driver Spec](specs/driver.md) 或 [RFC 0001](rfcs/0001-surrealdb-driver.md)。
 本索引与 `todos/*.md` 只记录规范与实现之间的差异。
@@ -11,7 +11,7 @@
 
 | 范围 | 清单 | 状态 | 当前重点 |
 |---|---|---|---|
-| SurrealDB Driver | [todos/driver.md](todos/driver.md) | Active | 实现八个 Operation、值编解码、集成 + e2e 测试 |
+| SurrealDB Driver | [todos/driver.md](todos/driver.md) | Implemented（首阶段） | 无；后续范围需先更新 Spec/RFC 与实施清单 |
 
 ## 使用规则
 

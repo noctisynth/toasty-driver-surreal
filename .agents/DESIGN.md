@@ -1,12 +1,12 @@
 # 设计索引
 
 > 状态：Active
-> 更新日期：2026-08-26
+> 更新日期：2026-08-30
 > 作用：`toasty-driver-surreal` 的权威工程设计入口
 
 本仓库为 [Toasty ORM](https://github.com/tokio-rs/toasty) 实现一个 out-of-tree 的 SurrealDB
 driver。工程事实按成熟度分为已生效的 `specs/`、决策记录 `rfcs/`、实现差异 `todos/` 和技术
-验证证据 `spikes/`。面向使用者的文档放在根目录 `docs/`。
+验证证据 `spikes/`。面向使用者的入口文档为根目录 `README.md`；后续扩展文档放在 `docs/`。
 
 ## 1. 项目方向
 
@@ -42,14 +42,14 @@ surrealdb 嵌入式 SDK (kv-mem / kv-rocksdb)
 
 实现前先在本索引定位 Active Spec 或已接受 RFC，再从 [TODO 索引](TODO.md) 进入实施清单。
 
-## 4. 当前工作顺序
+## 4. 当前状态与后续顺序
 
-1. 按 Spec 创建 crate 并用 Cargo CLI 添加依赖；
-2. 实现 Driver/Connection 骨架、能力位、值编解码；
-3. 实现八个 Operation 的 SurrealQL 翻译与 push_schema；
-4. 接入集成套件（kv-mem）并逐位调能力至绿；
-5. 补充嵌入式 RocksDB e2e；
-6. 运行质量门禁并交付。
+首阶段已按 Driver Spec 完成：Driver/Connection、八个 Operation、值编解码、schema 推送、
+kv-mem 共享集成测试、RocksDB e2e 与质量门禁均已落地。当前没有未完成的首阶段实施项，详见
+[Driver TODO](todos/driver.md)。
+
+远程引擎、事务、图边、live query、迁移生成、URL scheme 注册与裸 SurrealQL 均属于后续范围。
+开始其中任何一项前，先按本文件第 5 节更新设计/RFC/Spec 与实施清单，再修改实现和测试。
 
 ## 5. 变更规则
 
