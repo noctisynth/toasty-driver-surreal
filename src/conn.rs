@@ -6,6 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use surrealdb::Surreal;
 use surrealdb::engine::local::Db;
+use surrealdb::types::{RecordId, Value as SurValue};
 use toasty_core::driver::ExecResponse;
 use toasty_core::driver::operation::{Operation, Transaction, TransactionMode};
 use toasty_core::schema::Schema;
@@ -122,24 +123,131 @@ impl toasty_core::driver::Connection for Connection {
     }
 
     async fn applied_migrations(&mut self) -> toasty_core::Result<Vec<AppliedMigration>> {
-        Err(toasty_core::Error::unsupported_feature(
-            "SurrealDB driver does not implement migration tracking yet",
-        ))
+        self.ensure_no_active_transaction("query applied migrations")?;
+        self.ensure_migrations_table().await?;
+
+        let table = crate::expr::escape_ident(crate::migration::TRACKING_TABLE);
+        let alias = crate::expr::escape_ident(crate::migration::TRACKING_ID_ALIAS);
+        let mut response = self
+            .db
+            .query(format!("SELECT record::id(id) AS {alias} FROM {table}"))
+            .await
+            .map_err(classify_error)?
+            .check()
+            .map_err(classify_error)?;
+        let rows = take_rows(&mut response, 0)?;
+        let mut migrations = Vec::with_capacity(rows.len());
+
+        for row in rows {
+            let SurValue::Object(row) = row else {
+                return Err(invalid_migration_tracking_row());
+            };
+            let Some(SurValue::String(id)) = row.get(crate::migration::TRACKING_ID_ALIAS) else {
+                return Err(invalid_migration_tracking_row());
+            };
+            let id = id
+                .parse::<u64>()
+                .map_err(|_| invalid_migration_tracking_row())?;
+            migrations.push(AppliedMigration::new(id));
+        }
+
+        Ok(migrations)
     }
 
     async fn apply_migration(
         &mut self,
-        _id: u64,
-        _name: &str,
-        _migration: &db::Migration,
+        id: u64,
+        name: &str,
+        migration: &db::Migration,
     ) -> toasty_core::Result<()> {
-        Err(toasty_core::Error::unsupported_feature(
-            "SurrealDB driver does not implement migrations yet",
-        ))
+        self.ensure_no_active_transaction("apply a migration")?;
+        self.ensure_migrations_table().await?;
+
+        tracing::info!(
+            driver = "surrealdb",
+            migration_id = id,
+            "applying migration"
+        );
+        let transaction = self
+            .db
+            .clone()
+            .begin()
+            .await
+            .map_err(classify_migration_error)?;
+
+        let apply_result = async {
+            for (statement_index, statement) in migration.statements().into_iter().enumerate() {
+                if statement.trim().is_empty() {
+                    continue;
+                }
+                tracing::trace!(
+                    driver = "surrealdb",
+                    migration_id = id,
+                    statement_index,
+                    "executing migration statement"
+                );
+                transaction
+                    .query(statement)
+                    .await
+                    .map_err(classify_migration_error)?
+                    .check()
+                    .map_err(classify_migration_error)?;
+            }
+
+            let record_id = RecordId::new(crate::migration::TRACKING_TABLE, id.to_string());
+            transaction
+                .query(
+                    "CREATE $migration_record SET name = $migration_name, \
+                     applied_at = time::now() RETURN NONE",
+                )
+                .bind(("migration_record", SurValue::RecordId(record_id)))
+                .bind(("migration_name", SurValue::String(name.to_string())))
+                .await
+                .map_err(classify_migration_error)?
+                .check()
+                .map_err(classify_migration_error)?;
+
+            Ok::<(), toasty_core::Error>(())
+        }
+        .await;
+
+        if let Err(apply_error) = apply_result {
+            if let Err(cancel_error) = transaction.cancel().await {
+                return Err(classify_migration_error(cancel_error));
+            }
+            return Err(apply_error);
+        }
+
+        transaction
+            .commit()
+            .await
+            .map_err(classify_migration_error)?;
+        Ok(())
     }
 }
 
 impl Connection {
+    fn ensure_no_active_transaction(&self, operation: &str) -> toasty_core::Result<()> {
+        if self.transaction.is_some() {
+            Err(toasty_core::Error::invalid_statement(format!(
+                "cannot {operation} while a SurrealDB transaction is active"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn ensure_migrations_table(&self) -> toasty_core::Result<()> {
+        let table = crate::expr::escape_ident(crate::migration::TRACKING_TABLE);
+        self.db
+            .query(format!("DEFINE TABLE IF NOT EXISTS {table} SCHEMALESS"))
+            .await
+            .map_err(classify_error)?
+            .check()
+            .map_err(classify_error)?;
+        Ok(())
+    }
+
     async fn exec_transaction(&mut self, op: Transaction) -> toasty_core::Result<ExecResponse> {
         match op {
             Transaction::Start {
@@ -199,32 +307,9 @@ impl Connection {
     /// Defines a table and its non-primary-key indices. The primary key is the
     /// record id, so it needs no separate index.
     async fn define_table(&mut self, table: &db::Table) -> toasty_core::Result<()> {
-        let table_name = crate::expr::escape_ident(&table.name);
-        self.db
-            .query(format!(
-                "DEFINE TABLE IF NOT EXISTS {table_name} SCHEMALESS"
-            ))
-            .await
-            .map_err(classify_error)?
-            .check()
-            .map_err(classify_error)?;
-
-        for index in &table.indices {
-            if index.primary_key {
-                continue;
-            }
-            let index_name = crate::expr::escape_ident(&index.name);
-            let cols = index
-                .columns
-                .iter()
-                .map(|ic| crate::expr::escape_ident(&table.column(ic.column).name))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let unique = if index.unique { " UNIQUE" } else { "" };
+        for statement in crate::migration::define_table_statements(table, true) {
             self.db
-                .query(format!(
-                    "DEFINE INDEX IF NOT EXISTS {index_name} ON TABLE {table_name} COLUMNS {cols}{unique}"
-                ))
+                .query(statement)
                 .await
                 .map_err(classify_error)?
                 .check()
@@ -232,6 +317,29 @@ impl Connection {
         }
 
         Ok(())
+    }
+}
+
+fn invalid_migration_tracking_row() -> toasty_core::Error {
+    toasty_core::Error::serialization_failure(
+        "SurrealDB migration tracking table contains an invalid migration ID",
+    )
+}
+
+fn classify_migration_error(err: surrealdb::Error) -> toasty_core::Error {
+    let message = err.to_string();
+    if is_transaction_conflict(&err) || message.contains("Transaction conflict:") {
+        toasty_core::Error::serialization_failure("SurrealDB migration transaction conflicted")
+    } else if message.contains("manual migration required:") {
+        toasty_core::Error::unsupported_feature(
+            "SurrealDB migration requires manual editing before it can be applied",
+        )
+    } else if message.contains("already exists") {
+        toasty_core::Error::condition_failed("SurrealDB migration object already exists")
+    } else {
+        toasty_core::Error::driver_operation_failed(std::io::Error::other(
+            "SurrealDB migration statement failed",
+        ))
     }
 }
 

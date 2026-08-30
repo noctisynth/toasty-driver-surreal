@@ -5,6 +5,7 @@
 > 设计入口：[设计索引](../DESIGN.md)
 > 落地规范：[Driver Active Spec](../specs/driver.md)
 > 验证证据：[SurrealDB SDK Spike](../spikes/surrealdb-sdk-3.2.4.md)
+> 后续扩展：[RFC 0005：迁移跟踪与自动生成](0005-migrations.md)
 
 本 RFC 记录为 [Toasty ORM](https://github.com/tokio-rs/toasty) 实现 out-of-tree SurrealDB
 driver 的架构决定：把 SurrealDB 作为 Toasty 的 **KV/文档后端**接入，通过实现
@@ -41,7 +42,7 @@ SurrealDB 是多模数据库，查询语言为 SurrealQL。表面上它像 SQL�
 - 首阶段不实现 SurrealDB 事务下发（引擎按 `capability().sql()` 门控，KV 路径默认不下发
   `Operation::Transaction`）。
 - 首阶段不实现远程引擎（`ws://`/`http://`）、图边（`RELATE`）、live query、鉴权与多租户。
-- 不实现 SurrealDB 的 schema 迁移生成（`generate_migration`），与 DynamoDB driver 一致。
+- 首阶段不实现 SurrealDB 的 schema 迁移生成（`generate_migration`）；该限制后由 RFC 0005 扩展。
 
 ## 4. 已接受决策
 
@@ -164,7 +165,8 @@ surrealdb (嵌入式 SDK: kv-mem / kv-rocksdb)
 - `push_schema`：对每个表 `DEFINE TABLE <name> SCHEMALESS`（或 SCHEMAFULL，待 Spec 定），并为
   每个二级索引 `DEFINE INDEX <name> ON TABLE <tb> COLUMNS <cols> [UNIQUE]`。主键由 record id
   承担，不单独建索引。
-- `generate_migration`：首阶段 `unimplemented!()`（同 DynamoDB）。
+- `generate_migration`：首阶段 `unimplemented!()`（同 DynamoDB）；当前行为由 RFC 0005 与 Active
+  Spec 的迁移章节替代。
 
 ## 8. 错误分类
 

@@ -6,7 +6,8 @@
 
 任务必须来自 [Driver Spec](specs/driver.md) 或已接受 RFC（当前为
 [RFC 0001](rfcs/0001-surrealdb-driver.md)、[RFC 0002](rfcs/0002-surrealkv-engine.md)、
-[RFC 0003](rfcs/0003-explicit-transactions.md)、[RFC 0004](rfcs/0004-native-json.md)）。
+[RFC 0003](rfcs/0003-explicit-transactions.md)、[RFC 0004](rfcs/0004-native-json.md)、
+[RFC 0005](rfcs/0005-migrations.md)）。
 本索引与 `todos/*.md` 只记录规范与实现之间的差异。
 
 ## 实施清单
@@ -17,6 +18,7 @@
 | SurrealKV 引擎 | [todos/surrealkv.md](todos/surrealkv.md) | Implemented | feature、构造器、持久化 e2e 与 CI |
 | 显式事务 | [todos/transactions.md](todos/transactions.md) | Implemented | 顶层生命周期、只读保护、冲突分类与专用测试 |
 | 原生 JSON | [todos/native-json.md](todos/native-json.md) | Implemented | 列感知 codec、NULL 语义、读写路径与专用测试 |
+| 迁移 | [todos/migrations.md](todos/migrations.md) | Implemented | tracking、原子 apply、schema diff 自动生成与人工门禁 |
 
 ## 使用规则
 

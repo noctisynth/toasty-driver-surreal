@@ -7,16 +7,18 @@
 > 决策来源：[RFC 0001：Toasty SurrealDB Driver](../rfcs/0001-surrealdb-driver.md)、
 > [RFC 0002：SurrealKV 引擎](../rfcs/0002-surrealkv-engine.md)、
 > [RFC 0003：显式事务](../rfcs/0003-explicit-transactions.md)、
-> [RFC 0004：原生 JSON 列](../rfcs/0004-native-json.md)
+> [RFC 0004：原生 JSON 列](../rfcs/0004-native-json.md)、
+> [RFC 0005：迁移跟踪与自动生成](../rfcs/0005-migrations.md)
 > 验证证据：[SurrealDB SDK Spike](../spikes/surrealdb-sdk-3.2.4.md)、
 > [事务 Spike](../spikes/transactions-3.2.4.md)、
-> [原生 JSON Spike](../spikes/native-json-3.2.4.md)
+> [原生 JSON Spike](../spikes/native-json-3.2.4.md)、
+> [迁移 Spike](../spikes/migrations-3.2.4.md)
 > 实施清单：[Driver TODO](../todos/driver.md)、[事务 TODO](../todos/transactions.md)、
-> [原生 JSON TODO](../todos/native-json.md)
+> [原生 JSON TODO](../todos/native-json.md)、[迁移 TODO](../todos/migrations.md)
 
 本文冻结 driver 的公共接口、能力画像、值编解码、记录 ID 映射、每个 `Operation` 的 SurrealQL
-翻译、schema 推送、显式顶层事务、错误分类和测试门禁。没有被本文纳入的行为（嵌套事务、远程
-引擎、图边、迁移生成）不得由实现自行补全。
+翻译、schema 推送、显式顶层事务、迁移跟踪与自动生成、错误分类和测试门禁。没有被本文纳入的
+行为（嵌套事务、远程引擎、图边）不得由实现自行补全。
 
 ## 1. 范围
 
@@ -30,6 +32,7 @@
 - 支持用户显式顶层事务的 `Start`、`Commit`、`Rollback`，保持 KV 能力画像。
 - 支持 `#[column(type = json)]` 的原生 JSON 值与精确空值语义。
 - `push_schema` 定义表与二级索引。
+- 支持 Toasty migration tracking、事务化 apply，以及安全 schema diff 的 SurrealQL 自动生成。
 - 接入 `toasty-driver-integration-suite` 共享测试（`kv-mem`）+ 嵌入式 RocksDB e2e。
 
 ### 1.2 明确非目标
@@ -40,7 +43,10 @@
   driver 必须保持 KV 路径的 `sql = None`。
 - 远程引擎（`ws://`/`http://`）、鉴权、多租户。
 - 图边（`RELATE`）、live query、full-text/vector 检索。
-- SurrealDB schema 迁移生成（`generate_migration` 首阶段 `unimplemented!()`）。
+- 表 rename、主键布局/类型变化与字段存储类型转换的全自动数据迁移；generation 为这些变化生成
+  人工替换的 `THROW` 门禁。
+- migration checksum、down migration、跨进程 migration lease/锁表；Toasty 0.10 没有对应 driver
+  契约。
 - `Db::builder().connect(url)` 的 scheme 注册（out-of-tree 不可扩展）。
 - 用户裸 SurrealQL（`RawSql` 仅发 SQL driver）。
 - 原生 `JSONB` 能力与数据库层 JSON 字段类型强制。
@@ -52,8 +58,8 @@
 - 生产依赖：`toasty-core`（driver 契约）、`surrealdb`（嵌入式 SDK，Spike 验证的稳定版
   `3.2.4`，features `kv-mem`、`kv-surrealkv`，可选 `kv-rocksdb`）、`serde_json`（native JSON
   边界转换）、`async-trait`、`tracing`。
-- dev 依赖：`toasty`、`toasty-driver-integration-suite`、`tokio`（`macros`、`rt-multi-thread`）、
-  `uuid`。
+- dev 依赖：`toasty`（测试启用 `migration` feature）、`toasty-driver-integration-suite`、`tokio`
+  （`macros`、`rt-multi-thread`）、`uuid`。
 - 不依赖 `toasty`（生产）、`toasty-sql`、`Dialect`。
 
 ### 2.2 边界
@@ -316,6 +322,9 @@ Insert、UpdateByKey、Upsert 与 `row_to_record` 必须传递具体列。filter
 | 前置 `condition` 失败 | `condition_failed` |
 | SDK `QueryError::TransactionConflict` | `serialization_failure` |
 | native JSON 文本无效或数据库值不兼容 JSON | `serialization_failure` |
+| tracking migration ID 缺失、非字符串或不是合法 `u64` | `serialization_failure`（不回显行内容） |
+| 未替换的自动 migration 人工门禁 | `unsupported_feature`（不回显原始 statement） |
+| 其它 migration statement 失败 | `driver_operation_failed`（固定脱敏消息） |
 | 只读事务中的写 Operation | `read_only_transaction` |
 | 重复 Start 或无活动事务的 Commit/Rollback | `invalid_statement` |
 | 未支持的 Operation/Expr/特性 | `unsupported_feature` |
@@ -332,11 +341,40 @@ Insert、UpdateByKey、Upsert 与 `row_to_record` 必须传递具体列。filter
 
 - `push_schema(schema)`：对 `schema.db.tables` 每张表执行 `DEFINE TABLE <name> SCHEMALESS`；
   对每个非主键索引执行 `DEFINE INDEX <name> ON TABLE <tb> COLUMNS <cols> [UNIQUE]`。主键由
-  record id 承担，不建独立索引。
-- `applied_migrations`/`apply_migration`：首阶段可用一张 `__toasty_migrations` 表记录（对标
-  SQLite），或随 DynamoDB `todo!()`——**但不得 panic 逃逸到用户**；若不实现则返回
-  `unsupported_feature`。首阶段实现选择记录在 Driver TODO 中并保持与测试一致。
-- `generate_migration`：`unimplemented!()`（与 DynamoDB 一致，测试不覆盖迁移生成）。
+  record id 承担，不建独立索引。table/index statement renderer 必须与 migration generation 复用。
+- tracking 使用 driver 保留的 SCHEMALESS 表 `__toasty_migrations`。migration ID 以完整 `u64` 的
+  十进制字符串作为 record id，字段保存绑定的 `name` 与 `time::now()` 生成的 `applied_at`。
+- `applied_migrations()` 幂等确保 tracking 表存在，读取 `record::id(id)` 并严格解析为 `u64`；畸形
+  tracking 行返回 `serialization_failure`，错误不得回显记录内容。
+- `apply_migration()` 拒绝复用已有用户事务；它创建独立 SDK 客户端事务，按 breakpoint 执行全部
+  非空 SurrealQL statement，在同一事务内 CREATE 确定性 tracking record 后 commit。任一步失败则
+  cancel，migration ID 不落库。migration name 与 tracking record id 通过绑定参数传入。
+- Toasty 0.10 的 `Migration::Sql(String)` 在本 driver 中承载 SurrealQL；文件仍使用上游要求的
+  `.sql` 与 `-- #[toasty::breakpoint]`。这不改变 `Capability.sql = None`。
+
+### 10.1 自动 migration generation
+
+`generate_migration(diff)` 不得 panic，按下表转换：
+
+| Diff | SurrealQL |
+|---|---|
+| Create table | DEFINE SCHEMALESS table，再 DEFINE 非主键 indices |
+| Drop table | REMOVE TABLE（索引随表删除） |
+| Create/Drop/Alter index | DEFINE / REMOVE / REMOVE+DEFINE |
+| Add column | 无物理 DDL（SCHEMALESS） |
+| Drop non-PK column | `UPDATE <table> UNSET <column> RETURN NONE` |
+| Rename non-PK column且类型不变 | 先把引用索引切换到新字段，再 SET 新字段并 UNSET 旧字段 |
+| Rename PK column且 PK 映射/类型不变 | 无物理 DML；record id 不受列别名影响 |
+| nullable/auto-increment/versionable 变化 | 无物理 DDL（SCHEMALESS） |
+
+非空 diff 若没有物理 statement，生成 `RETURN NONE`。表 rename、PK 列集合/顺序/类型变化、非 PK
+字段 `stmt::Type`/`storage_ty` 变化以及未来未知 diff 必须生成
+`THROW 'manual migration required: ...'`，供用户审阅替换；未替换时 apply 失败并回滚，不能静默
+记录成功。
+
+同一 table alter 内必须按 REMOVE 旧索引 → DEFINE 新索引 → 字段 DML 排序；SDK 3.2.4 在事务内
+先写未提交字段再建索引时，index builder 不会收录这些值。先定义新字段索引再 UPDATE，事务 DML
+才能维护索引并执行唯一约束。
 
 ## 11. 测试门禁
 
@@ -381,7 +419,15 @@ Insert、UpdateByKey、Upsert 与 `row_to_record` 必须传递具体列。filter
 - kv-surrealkv 与 kv-rocksdb 各覆盖至少一组 native JSON 文件引擎往返；
 - codec 单元测试验证内部 null 字段、非法 JSON 的 `serialization_failure` 与错误不泄漏载荷。
 
-### 11.6 单元测试
+### 11.6 迁移（kv-mem + kv-surrealkv）
+
+- generation 单元测试覆盖 table/index create/drop/alter、SCHEMALESS column add/drop/rename、特殊
+  identifier、no-op 与人工门禁；
+- kv-mem 真实 Connection 覆盖首次 apply、已应用 ID、breakpoint 顺序、`u64::MAX` 与失败回滚；
+- SurrealKV 覆盖 tracking ID 与 schema 变化跨重开持久化；
+- 失败路径必须验证 migration DDL/DML 和 tracking record 同时不可见，连接仍可复用。
+
+### 11.7 单元测试
 
 - 值编解码 round-trip（各 `stmt::Value` 变体）。
 - 记录 ID 映射（单列 i64/String/Uuid、复合）。
@@ -397,7 +443,8 @@ Insert、UpdateByKey、Upsert 与 `row_to_record` 必须传递具体列。filter
 ## 13. 实现与文档状态
 
 首阶段 driver、SurrealKV 引擎与显式顶层事务均已满足本规范及对应 RFC；原生 JSON 按 RFC 0004
-实施并由专用测试覆盖。
+实施并由专用测试覆盖。迁移跟踪与自动生成已由 RFC 0005 接受，并按迁移 TODO 落地。
 后续差异分别由 [Driver TODO](../todos/driver.md)、[SurrealKV TODO](../todos/surrealkv.md) 与
 [事务 TODO](../todos/transactions.md)、[原生 JSON TODO](../todos/native-json.md) 跟踪。README 只可
-宣称上述已验证范围，不得把后续非目标描述为已支持。
+宣称上述已验证范围，不得把后续非目标描述为已支持；迁移差异由
+[迁移 TODO](../todos/migrations.md) 跟踪。

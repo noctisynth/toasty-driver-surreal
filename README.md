@@ -13,8 +13,8 @@ driver is its structural blueprint.
 
 ## Status
 
-First-stage implementation plus SurrealKV, explicit transactions, and native
-JSON. **609 of 616** generated shared Toasty integration-suite tests pass
+First-stage implementation plus SurrealKV, explicit transactions, native JSON,
+and migrations. **609 of 616** generated shared Toasty integration-suite tests pass
 directly against the in-memory engine. Seven operation-shape assertions are
 excluded for documented upstream-suite reasons, with equivalent driver-owned
 runtime coverage (see [Known divergences](#known-divergences)). SurrealKV and
@@ -70,6 +70,41 @@ toasty-driver-surreal = { version = "0.1", features = ["rocksdb"] }
 
 Namespace and database default to `"toasty"`; override with
 `.namespace(..)` / `.database(..)`.
+
+### Migrations
+
+The driver supports Toasty's migration tracking and embedded migration apply
+flow. Enable Toasty's `migration` feature in the application:
+
+```toml
+toasty = { version = "0.10", features = ["migration"] }
+```
+
+Migration files keep Toasty's required `.sql` extension but contain
+**SurrealQL**. Apply an embedded set in the normal Toasty way:
+
+```rust
+static MIGRATIONS: toasty::migration::MigrationSet =
+    toasty::embed_migrations!();
+
+let report = MIGRATIONS.apply(&db).await?;
+println!("applied={}, skipped={}", report.applied(), report.skipped());
+```
+
+Applied IDs are stored in the driver-reserved `__toasty_migrations` table.
+Every migration's statements and tracking record run in one SurrealDB client
+transaction, so a failure records neither partial schema/data changes nor the
+migration ID. Full `u64` IDs are preserved.
+
+`toasty::migration::generate()` is also supported. It generates SurrealQL for
+table/index create, drop, and alter operations plus safe SCHEMALESS field
+add/drop/rename changes. Table renames, primary-key layout changes, and field
+type conversions need application-specific data handling; generated files
+contain an explicit `THROW 'manual migration required: ...'` guard for those
+cases. Replace that statement with reviewed SurrealQL before applying.
+
+`push_schema()` remains convenient for fresh development/test databases. Use
+tracked migrations when upgrading persistent databases.
 
 ### Explicit transactions
 
@@ -133,13 +168,16 @@ no separate JSONB storage contract.
   (via `toasty-core`'s `jiff` + `rust_decimal`, stored as canonical text).
 - Native JSON columns for `toasty::Json<T>` and `serde_json::Value`, including
   database-null versus JSON-null semantics.
+- Toasty migration generation, embedded apply/skip tracking, transactional
+  rollback, and persistent migration IDs across file-engine reopen.
 
 ## Not supported (first stage)
 
 Remote engines (`ws://`/`http://`), native JSONB, nested transactions/savepoints,
-explicit isolation or non-default lock modes, graph edges, live queries, migration
-generation, URL-scheme registration, and raw SurrealQL pass-through. Each
-requires a spec update before implementation.
+explicit isolation or non-default lock modes, graph edges, live queries,
+fully automatic table/primary-key/type data conversion, migration checksums,
+down migrations, cross-process migration leases, URL-scheme registration, and
+raw SurrealQL pass-through. Each requires a spec update before implementation.
 
 ## Known divergences
 
@@ -168,6 +206,7 @@ and the SurrealKV/RocksDB e2e tests cover the same runtime contract.
 cargo test                                   # unit + in-memory suite + smoke
 cargo test --test transactions -- --test-threads=1
 cargo test --test native_json -- --test-threads=1
+cargo test --test migrations -- --test-threads=1
 cargo test --test e2e_surrealkv -- --test-threads=1
 cargo test --test e2e_rocksdb --features rocksdb -- --test-threads=1
 ```
@@ -190,5 +229,6 @@ Engineering design lives under `.agents/`: accepted
 [driver](.agents/rfcs/0001-surrealdb-driver.md),
 [SurrealKV](.agents/rfcs/0002-surrealkv-engine.md),
 [transaction](.agents/rfcs/0003-explicit-transactions.md), and
-[native JSON](.agents/rfcs/0004-native-json.md) RFCs; the
+[native JSON](.agents/rfcs/0004-native-json.md), and
+[migration](.agents/rfcs/0005-migrations.md) RFCs; the
 [active spec](.agents/specs/driver.md); and the implementation checklists.

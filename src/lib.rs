@@ -36,12 +36,20 @@
 //! handle when atomicity is required. Nested transactions, savepoints,
 //! explicit isolation levels, and non-default transaction modes are rejected.
 //!
+//! Toasty migration tracking and generation are supported. Migration files
+//! carry SurrealQL in Toasty's `Migration::Sql` container; applying a migration
+//! executes its statements and the `__toasty_migrations` tracking record in one
+//! SurrealDB client transaction. Safe table/index/SCHEMALESS-column diffs are
+//! generated automatically, while table renames, primary-key changes, and
+//! field type conversions produce an explicit manual-migration guard.
+//!
 //! Attach the driver with `Db::builder().build(driver)`; the driver does not
 //! register a URL scheme, so `Db::builder().connect(url)` is not used.
 
 mod capability;
 mod conn;
 mod expr;
+mod migration;
 mod op;
 mod record_id;
 mod value;
@@ -220,10 +228,8 @@ impl Driver for SurrealDb {
         }
     }
 
-    fn generate_migration(&self, _schema_diff: &diff::Schema<'_>) -> Migration {
-        unimplemented!(
-            "SurrealDB migration generation is not supported yet; schema is applied via push_schema"
-        )
+    fn generate_migration(&self, schema_diff: &diff::Schema<'_>) -> Migration {
+        migration::generate(schema_diff)
     }
 
     async fn reset_db(&self) -> toasty_core::Result<()> {

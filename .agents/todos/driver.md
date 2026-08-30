@@ -27,7 +27,7 @@
 - [x] `SurrealDb`：`mem()`、`rocksdb(path)`（feature-gated）、`namespace()`、`database()`。
 - [x] 共享 `Surreal<Db>` 句柄缓存（`Arc<Mutex<Option<..>>>`），`connect()` 复用并选 ns/db。
 - [x] `Driver`：`url`、`capability`（FRU 基线 DYNAMODB）、`connect`、`max_connections`、
-  `reset_db`、`generate_migration`（unimplemented）。
+  `reset_db`；首阶段 `generate_migration` 为 unimplemented，后由 RFC 0005 的迁移清单替代。
 - [x] `capability()` 通过 `Capability::validate()`（单元测试覆盖）。
 
 ## P3：值编解码
@@ -51,7 +51,8 @@
 - [x] `expr::render()` 过滤翻译器：BinaryOp/And/Or/Not/IsNull/Between/InList/AnyOp/
   IsSuperset/Intersects/Length/StartsWith/JsonExtract/Reference/Value/List，带 `_` 通配臂。
 - [x] `push_schema`（DEFINE TABLE + DEFINE INDEX，含 UNIQUE）。
-- [x] `applied_migrations`/`apply_migration` 首阶段返回 `unsupported_feature`（不 panic）。
+- [x] `applied_migrations`/`apply_migration` 首阶段返回 `unsupported_feature`（不 panic）；后由
+  RFC 0005 的迁移清单替代。
 
 ## P5：测试
 
@@ -97,4 +98,5 @@
 
 ## 后续范围（不在首阶段）
 
-远程引擎、图边、live query、迁移生成、URL scheme 注册、裸 SurrealQL。需各自更新 Spec 后再实施。
+远程引擎、图边、live query、URL scheme 注册、裸 SurrealQL。迁移生成已转入 RFC 0005 与
+`todos/migrations.md`；其余范围需各自更新 Spec 后再实施。

@@ -41,10 +41,12 @@ Toasty native JSON 文本与 SurrealDB native value 的边界转换；不依赖 
 | [RFC 0002：SurrealKV 引擎](rfcs/0002-surrealkv-engine.md) | Accepted RFC | SurrealKV SDK feature、构造器、持久化与验证边界 |
 | [RFC 0003：显式事务](rfcs/0003-explicit-transactions.md) | Accepted RFC | 顶层事务生命周期、只读保护、错误分类及非目标 |
 | [RFC 0004：原生 JSON 列](rfcs/0004-native-json.md) | Accepted RFC | `db::Type::Json` 列感知 codec、NULL 语义、能力与测试边界 |
+| [RFC 0005：迁移跟踪与自动生成](rfcs/0005-migrations.md) | Accepted RFC | tracking 表、原子应用、schema diff→SurrealQL 与人工迁移门禁 |
 | [SurrealDB SDK Spike](spikes/surrealdb-sdk-3.2.4.md) | Completed Spike | SDK 行为证据、`type::record` 坑、值往返、版本锁定依据 |
 | [SurrealKV Spike](spikes/surrealkv-3.2.4.md) | Completed Spike | SurrealKV 编译、连接、持久化与客户端事务共存证据 |
 | [事务 Spike](spikes/transactions-3.2.4.md) | Completed Spike | SDK commit/cancel、隔离、持久化、savepoint 与 Toasty 路由证据 |
 | [原生 JSON Spike](spikes/native-json-3.2.4.md) | Completed Spike | Toasty JSON wire 契约、SDK native value 与共享测试限制 |
+| [迁移 Spike](spikes/migrations-3.2.4.md) | Completed Spike | Toasty migration 契约、事务化 DDL/tracking、no-op 与完整 u64 ID |
 
 实现前先在本索引定位 Active Spec 或已接受 RFC，再从 [TODO 索引](TODO.md) 进入实施清单。
 
@@ -62,8 +64,10 @@ SurrealKV 引擎扩展已由 RFC 0002 接受，并已按 [SurrealKV TODO](todos/
 原生 JSON 列已由 RFC 0004 接受，并已按 [原生 JSON TODO](todos/native-json.md) 落地。该能力只
 开放 `native_json`，不把 SurrealDB 的单一 JSON 值模型冒充为 JSONB。
 
-远程引擎、嵌套事务/savepoint、图边、live query、迁移生成、URL scheme 注册与裸 SurrealQL 均属于
-后续范围。
+迁移跟踪与自动生成已由 RFC 0005 接受，并已按 [迁移 TODO](todos/migrations.md) 落地。安全的
+表/索引/SCHEMALESS 字段变化自动生成 SurrealQL；表 rename、PK 变化与字段类型转换保留人工门禁。
+
+远程引擎、嵌套事务/savepoint、图边、live query、URL scheme 注册与裸 SurrealQL 均属于后续范围。
 开始其中任何一项前，先按本文件第 5 节更新设计/RFC/Spec 与实施清单，再修改实现和测试。
 
 ## 5. 变更规则

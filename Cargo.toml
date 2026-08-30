@@ -20,7 +20,7 @@ tracing = "0.1.44"
 
 [dev-dependencies]
 hashbrown = "0.17.1"
-toasty = "0.10"
+toasty = { version = "0.10", features = ["migration"] }
 toasty-driver-integration-suite = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
