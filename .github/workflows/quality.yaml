@@ -65,3 +65,29 @@ jobs:
       # must run single-threaded.
       - name: e2e (kv-rocksdb)
         run: cargo test --test e2e_rocksdb --features rocksdb --locked -- --test-threads=1
+
+  remote:
+    name: Remote HTTP and WebSocket
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install SurrealDB
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://install.surrealdb.com | sh
+          echo "$HOME/.surrealdb" >> "$GITHUB_PATH"
+          surreal version
+      - name: Start SurrealDB memory server
+        run: |
+          surreal start --no-banner --unauthenticated --bind 127.0.0.1:18000 memory > "$RUNNER_TEMP/surreal.log" 2>&1 &
+          for i in {1..30}; do
+            curl --fail --silent http://127.0.0.1:18000/health && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/surreal.log"
+          exit 1
+      - name: Test remote HTTP and WebSocket
+        run: cargo test --test remote --features remote-http,remote-ws --locked -- --nocapture
