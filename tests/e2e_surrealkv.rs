@@ -1,3 +1,4 @@
+#![cfg(feature = "surrealkv")]
 //! End-to-end tests against the embedded SurrealKV engine.
 //!
 //! Each test uses a unique directory under `.e2e-data/` (git-ignored). Run

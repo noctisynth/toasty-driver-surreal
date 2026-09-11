@@ -133,6 +133,7 @@ async fn mem_explicit_transaction_core_lifecycle() {
     exercise_core_lifecycle(SurrealDb::mem()).await;
 }
 
+#[cfg(feature = "surrealkv")]
 #[tokio::test]
 async fn surrealkv_explicit_transaction_core_lifecycle() {
     let path = format!(
@@ -262,6 +263,7 @@ async fn unsupported_options_and_savepoints_are_structured() {
         .expect("savepoint errors preserve the active top-level transaction");
 }
 
+#[cfg(feature = "surrealkv")]
 #[tokio::test]
 async fn surrealkv_write_conflict_is_serialization_failure() {
     let path = format!(

@@ -337,6 +337,7 @@ async fn malformed_tracking_ids_return_sanitized_serialization_errors() {
     assert!(!error.to_string().contains("not-a-u64"));
 }
 
+#[cfg(feature = "surrealkv")]
 #[tokio::test]
 async fn surrealkv_tracking_persists_across_reopen() {
     let path = format!(

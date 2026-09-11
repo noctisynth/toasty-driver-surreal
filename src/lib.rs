@@ -55,6 +55,7 @@ mod record_id;
 mod value;
 
 use std::borrow::Cow;
+#[cfg(any(feature = "surrealkv", feature = "rocksdb"))]
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -74,6 +75,7 @@ enum Engine {
     /// In-memory (`kv-mem`). Every fresh database starts empty.
     Mem,
     /// File-backed embedded SurrealKV (`kv-surrealkv`) at the given path.
+    #[cfg(feature = "surrealkv")]
     SurrealKv(PathBuf),
     /// File-backed embedded RocksDB (`kv-rocksdb`) at the given path.
     ///
@@ -121,6 +123,7 @@ impl SurrealDb {
 
     /// Create a file-backed embedded SurrealKV (`kv-surrealkv`) driver rooted
     /// at `path`.
+    #[cfg(feature = "surrealkv")]
     pub fn surrealkv(path: impl Into<PathBuf>) -> Self {
         Self::with_engine(Engine::SurrealKv(path.into()))
     }
@@ -164,6 +167,7 @@ impl SurrealDb {
                 Engine::Mem => Surreal::new::<surrealdb::engine::local::Mem>(())
                     .await
                     .map_err(conn::classify_error)?,
+                #[cfg(feature = "surrealkv")]
                 Engine::SurrealKv(path) => {
                     Surreal::new::<surrealdb::engine::local::SurrealKv>(path.as_path())
                         .await
@@ -196,6 +200,7 @@ impl Driver for SurrealDb {
     fn url(&self) -> Cow<'_, str> {
         match &self.engine {
             Engine::Mem => Cow::Borrowed("surrealdb:mem"),
+            #[cfg(feature = "surrealkv")]
             Engine::SurrealKv(path) => {
                 Cow::Owned(format!("surrealdb:surrealkv:{}", path.display()))
             }
@@ -222,6 +227,7 @@ impl Driver for SurrealDb {
         // the in-memory SQLite driver.
         match self.engine {
             Engine::Mem => Some(1),
+            #[cfg(feature = "surrealkv")]
             Engine::SurrealKv(_) => None,
             #[cfg(feature = "rocksdb")]
             Engine::RocksDb(_) => None,
@@ -236,8 +242,9 @@ impl Driver for SurrealDb {
         // Drop the cached handle so the next connect starts fresh.
         self.handle.lock().await.take();
 
-        let file_path = match &self.engine {
+        let file_path: Option<&std::path::Path> = match &self.engine {
             Engine::Mem => None,
+            #[cfg(feature = "surrealkv")]
             Engine::SurrealKv(path) => Some(path),
             #[cfg(feature = "rocksdb")]
             Engine::RocksDb(path) => Some(path),

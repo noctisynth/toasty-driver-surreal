@@ -57,7 +57,7 @@ async fn main() -> toasty::Result<()> {
 | Constructor | Engine | Availability |
 |---|---|---|
 | `SurrealDb::mem()` | in-memory (`kv-mem`) | default |
-| `SurrealDb::surrealkv(path)` | embedded file (`kv-surrealkv`) | default |
+| `SurrealDb::surrealkv(path)` | embedded file (`kv-surrealkv`) | `surrealkv` feature |
 | `SurrealDb::rocksdb(path)` | embedded file (`kv-rocksdb`) | `rocksdb` feature |
 
 SurrealKV is SurrealDB's native file-backed engine and is available without an
@@ -207,7 +207,7 @@ cargo test                                   # unit + in-memory suite + smoke
 cargo test --test transactions -- --test-threads=1
 cargo test --test native_json -- --test-threads=1
 cargo test --test migrations -- --test-threads=1
-cargo test --test e2e_surrealkv -- --test-threads=1
+cargo test --test e2e_surrealkv --features surrealkv -- --test-threads=1
 cargo test --test e2e_rocksdb --features rocksdb -- --test-threads=1
 ```
 
