@@ -35,7 +35,7 @@ jobs:
       # SurrealDB does not share. Four native-JSON cases hard-code SQL operation
       # shapes that cannot describe a KV driver; tests/native_json.rs covers
       # the equivalent runtime behavior. See tests/mem.rs for the rationale.
-      - name: Test (in-memory + SurrealKV)
+      - name: Test (in-memory)
         run: >-
           cargo test --workspace --locked --
           --skip composite_index_too_many_range_columns
@@ -90,4 +90,4 @@ jobs:
           cat "$RUNNER_TEMP/surreal.log"
           exit 1
       - name: Test remote HTTP and WebSocket
-        run: cargo test --test remote --features remote-http,remote-ws --locked -- --nocapture
+        run: cargo test --test remote --features remote-http,remote-ws --locked -- --nocapture --test-threads=1

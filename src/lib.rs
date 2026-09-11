@@ -27,7 +27,7 @@
 //! ```
 //!
 //! A file-backed embedded SurrealKV engine is available via
-//! [`SurrealDb::surrealkv`]. RocksDB is available behind the `rocksdb` crate
+//! `SurrealDb::surrealkv` with the `surrealkv` feature. RocksDB is available behind the `rocksdb` crate
 //! feature via `SurrealDb::rocksdb(path)`.
 //!
 //! Top-level explicit transactions created with Toasty's `Db::transaction()`
@@ -88,7 +88,7 @@ enum Engine {
 
 /// A SurrealDB [`Driver`] backed by the embedded `surrealdb` SDK.
 ///
-/// Construct with [`SurrealDb::mem`] (in-memory), [`SurrealDb::surrealkv`]
+/// Construct with [`SurrealDb::mem`] (in-memory), `SurrealDb::surrealkv`
 /// (file-backed), or `SurrealDb::rocksdb` (file-backed, requires the `rocksdb`
 /// feature), optionally overriding the namespace and database with
 /// [`SurrealDb::namespace`] / [`SurrealDb::database`]. Attach it with
