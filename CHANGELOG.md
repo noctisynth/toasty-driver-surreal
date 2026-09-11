@@ -1,5 +1,22 @@
 # Changelog
 
+<!-- semifold:release version=0.1.0-alpha.2 -->
+## v0.1.0-alpha.2
+
+### Changes
+
+- [`44acfb1`](https://github.com/noctisynth/toasty-driver-surreal/commit/44acfb13349c9c88db30a9b8d868756c1b23b47f): Make SurrealKV optional and keep the default build limited to the in-memory engine.
+
+    Document the remote HTTP/WS implementation plan.
+
+- [`dabdd02`](https://github.com/noctisynth/toasty-driver-surreal/commit/dabdd021e8dc41debbecb3a080ec39f904079b8d): Support SurrealDB Any engine with optional HTTP and WebSocket remote constructors.
+
+    Reuse the unified Any backend for local and remote sessions while keeping heavy local engines optional.
+
+- [`b55a690`](https://github.com/noctisynth/toasty-driver-surreal/commit/b55a69070437a673549204c94e664f0b63278cfd): Run real HTTP and WebSocket integration tests against a SurrealDB memory server in CI.
+- [`656bd84`](https://github.com/noctisynth/toasty-driver-surreal/commit/656bd8486d001bc20089dc882156e772b14f9e62): Add real HTTP and WebSocket connection tests against a local SurrealDB memory server.
+<!-- semifold:release:end -->
+
 <!-- semifold:release version=0.1.0-alpha.1 -->
 ## v0.1.0-alpha.1
 
