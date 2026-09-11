@@ -28,6 +28,8 @@ uuid = { version = "1", features = ["v4"] }
 [features]
 default = []
 surrealkv = ["surrealdb/kv-surrealkv"]
+remote-http = ["surrealdb/protocol-http"]
+remote-ws = ["surrealdb/protocol-ws"]
 # Embedded file-backed RocksDB engine. Off by default because it compiles
 # `librocksdb` from source (a large, slow C++ build). Enable it to use the
 # file-backed engine and to run the RocksDB end-to-end tests.

@@ -58,6 +58,8 @@ async fn main() -> toasty::Result<()> {
 |---|---|---|
 | `SurrealDb::mem()` | in-memory (`kv-mem`) | default |
 | `SurrealDb::surrealkv(path)` | embedded file (`kv-surrealkv`) | `surrealkv` feature |
+| `SurrealDb::http(url)` | remote HTTP/HTTPS | `remote-http` feature |
+| `SurrealDb::ws(url)` | remote WS/WSS | `remote-ws` feature |
 | `SurrealDb::rocksdb(path)` | embedded file (`kv-rocksdb`) | `rocksdb` feature |
 
 SurrealKV is SurrealDB's native file-backed engine and is available without an

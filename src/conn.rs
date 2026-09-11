@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use surrealdb::Surreal;
-use surrealdb::engine::local::Db;
+use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, Value as SurValue};
 use toasty_core::driver::ExecResponse;
 use toasty_core::driver::operation::{Operation, Transaction, TransactionMode};
@@ -18,8 +18,8 @@ use toasty_core::schema::db::{self, AppliedMigration};
 /// selected). Cloning the handle shares the underlying store, so every pool
 /// slot sees the same data.
 pub struct Connection {
-    pub(crate) db: Surreal<Db>,
-    transaction: Option<surrealdb::method::Transaction<Db>>,
+    pub(crate) db: Surreal<Any>,
+    transaction: Option<surrealdb::method::Transaction<Any>>,
     read_only: bool,
 }
 
@@ -30,7 +30,7 @@ impl std::fmt::Debug for Connection {
 }
 
 impl Connection {
-    pub(crate) fn new(db: Surreal<Db>) -> Self {
+    pub(crate) fn new(db: Surreal<Any>) -> Self {
         Self {
             db,
             transaction: None,

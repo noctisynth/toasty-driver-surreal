@@ -61,7 +61,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use surrealdb::Surreal;
-use surrealdb::engine::local::Db;
+use surrealdb::engine::any::Any;
 use toasty_core::driver::{Capability, ConnectContext, Driver};
 use toasty_core::schema::db::Migration;
 use toasty_core::schema::diff;
@@ -74,6 +74,8 @@ pub use conn::Connection;
 enum Engine {
     /// In-memory (`kv-mem`). Every fresh database starts empty.
     Mem,
+    #[cfg(any(feature = "remote-http", feature = "remote-ws"))]
+    Remote(String),
     /// File-backed embedded SurrealKV (`kv-surrealkv`) at the given path.
     #[cfg(feature = "surrealkv")]
     SurrealKv(PathBuf),
@@ -99,7 +101,7 @@ pub struct SurrealDb {
     /// Shared handle, opened lazily on first connect and reused across pool
     /// slots so that an in-memory database is genuinely shared. Cleared by
     /// [`Driver::reset_db`].
-    handle: Arc<Mutex<Option<Surreal<Db>>>>,
+    handle: Arc<Mutex<Option<Surreal<Any>>>>,
 }
 
 impl std::fmt::Debug for SurrealDb {
@@ -119,6 +121,18 @@ impl SurrealDb {
     /// Create an in-memory (`kv-mem`) SurrealDB driver.
     pub fn mem() -> Self {
         Self::with_engine(Engine::Mem)
+    }
+
+    /// Create a remote HTTP/HTTPS SurrealDB driver.
+    #[cfg(feature = "remote-http")]
+    pub fn http(url: impl Into<String>) -> Self {
+        Self::with_engine(Engine::Remote(url.into()))
+    }
+
+    /// Create a remote WS/WSS SurrealDB driver.
+    #[cfg(feature = "remote-ws")]
+    pub fn ws(url: impl Into<String>) -> Self {
+        Self::with_engine(Engine::Remote(url.into()))
     }
 
     /// Create a file-backed embedded SurrealKV (`kv-surrealkv`) driver rooted
@@ -160,31 +174,23 @@ impl SurrealDb {
 
     /// Opens the shared handle on first use and returns a session-scoped clone
     /// with the namespace and database selected.
-    async fn session(&self) -> toasty_core::Result<Surreal<Db>> {
+    async fn session(&self) -> toasty_core::Result<Surreal<Any>> {
         let mut slot = self.handle.lock().await;
         if slot.is_none() {
-            let db = match &self.engine {
-                Engine::Mem => Surreal::new::<surrealdb::engine::local::Mem>(())
-                    .await
-                    .map_err(conn::classify_error)?,
+            let endpoint = match &self.engine {
+                Engine::Mem => "mem://".to_string(),
+                #[cfg(any(feature = "remote-http", feature = "remote-ws"))]
+                Engine::Remote(url) => url.clone(),
                 #[cfg(feature = "surrealkv")]
-                Engine::SurrealKv(path) => {
-                    Surreal::new::<surrealdb::engine::local::SurrealKv>(path.as_path())
-                        .await
-                        .map_err(conn::classify_error)?
-                }
+                Engine::SurrealKv(path) => format!("surrealkv://{}", path.display()),
                 #[cfg(feature = "rocksdb")]
-                Engine::RocksDb(path) => {
-                    Surreal::new::<surrealdb::engine::local::RocksDb>(path.as_path())
-                        .await
-                        .map_err(conn::classify_error)?
-                }
+                Engine::RocksDb(path) => format!("rocksdb://{}", path.display()),
             };
+            let db = surrealdb::engine::any::connect(endpoint)
+                .await
+                .map_err(conn::classify_error)?;
             *slot = Some(db);
         }
-
-        // A cloned handle shares the underlying store but gets a fresh session,
-        // so namespace/database must be selected on the clone.
         let session = slot.as_ref().expect("handle opened above").clone();
         session
             .use_ns(self.namespace.clone())
@@ -200,6 +206,8 @@ impl Driver for SurrealDb {
     fn url(&self) -> Cow<'_, str> {
         match &self.engine {
             Engine::Mem => Cow::Borrowed("surrealdb:mem"),
+            #[cfg(any(feature = "remote-http", feature = "remote-ws"))]
+            Engine::Remote(url) => Cow::Owned(url.clone()),
             #[cfg(feature = "surrealkv")]
             Engine::SurrealKv(path) => {
                 Cow::Owned(format!("surrealdb:surrealkv:{}", path.display()))
@@ -227,6 +235,8 @@ impl Driver for SurrealDb {
         // the in-memory SQLite driver.
         match self.engine {
             Engine::Mem => Some(1),
+            #[cfg(any(feature = "remote-http", feature = "remote-ws"))]
+            Engine::Remote(_) => None,
             #[cfg(feature = "surrealkv")]
             Engine::SurrealKv(_) => None,
             #[cfg(feature = "rocksdb")]
@@ -244,6 +254,8 @@ impl Driver for SurrealDb {
 
         let file_path: Option<&std::path::Path> = match &self.engine {
             Engine::Mem => None,
+            #[cfg(any(feature = "remote-http", feature = "remote-ws"))]
+            Engine::Remote(_) => None,
             #[cfg(feature = "surrealkv")]
             Engine::SurrealKv(path) => Some(path),
             #[cfg(feature = "rocksdb")]
